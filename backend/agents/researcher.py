@@ -16,12 +16,26 @@ class ResearcherAgent:
                 "prompt": prompt,
                 "stream": False
             }
-            response = requests.post(url, json=payload, timeout=120)
+            response = requests.post(url, json=payload, timeout=300)
             response.raise_for_status()
             data = response.json()
             return data.get("response", "").strip()
         except requests.exceptions.RequestException as e:
-            return f"[LLM unavailable: {e}]"
+            error_msg = str(e)
+            if "Connection refused" in error_msg or "ConnectTimeout" in error_msg:
+                raise RuntimeError(
+                    "Ollama is not running. Please start it:\n"
+                    "1. Install: brew install ollama (or https://ollama.ai)\n"
+                    "2. Pull model: ollama pull mistral\n"
+                    "3. Start server: ollama serve"
+                )
+            elif "Read timed out" in error_msg:
+                raise RuntimeError(
+                    "Ollama request timed out. The model may be taking too long.\n"
+                    "Try a smaller/faster model: ollama pull llama2:7b"
+                )
+            else:
+                raise RuntimeError(f"Ollama error: {error_msg}")
 
     def _scrape_url(self, url: str) -> str:
         try:
