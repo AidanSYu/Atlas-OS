@@ -10,16 +10,16 @@ class ResearcherAgent:
         Make sure `ollama serve` is running.
         """
         try:
-            url = "http://127.0.0.1:11434/v1/completions"
+            url = "http://127.0.0.1:11434/api/generate"
             payload = {
-                "model": "gpt-4o",   # change if your model is different
+                "model": "mistral",
                 "prompt": prompt,
-                "max_tokens": max_tokens
+                "stream": False
             }
             response = requests.post(url, json=payload, timeout=120)
             response.raise_for_status()
             data = response.json()
-            return data.get("completion", "").strip()
+            return data.get("response", "").strip()
         except requests.exceptions.RequestException as e:
             return f"[LLM unavailable: {e}]"
 
