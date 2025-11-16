@@ -43,7 +43,7 @@ class ManufacturabilityAgent:
         
         try:
             if hasattr(self.chem_client, 'generate'):
-                response = self.chem_client.generate(prompt=prompt, max_tokens=256)
+                response = self.chem_client.generate(prompt=prompt, max_tokens=512)
                 # Ensure response is a string
                 if response is None:
                     return "[ChemLLM returned None]"

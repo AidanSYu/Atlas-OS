@@ -35,7 +35,7 @@ class HuggingFaceChemLLM:
             if torch.cuda.is_available():
                 self.model = AutoModelForCausalLM.from_pretrained(
                     model_id,
-                    torch_dtype=torch.float16,
+                    dtype=torch.float16,
                     device_map="auto",
                     trust_remote_code=True,
                 )
@@ -49,7 +49,7 @@ class HuggingFaceChemLLM:
         except Exception as e:
             raise RuntimeError(f"Failed to load HF model {model_id}: {e}")
 
-    def generate(self, prompt: str, model: str = None, max_tokens: int = 256):
+    def generate(self, prompt: str, model: str = None, max_tokens: int = 512):
         """Generate response using simple, direct generation without hanging issues."""
         try:
             inputs = self.tokenizer(prompt, return_tensors="pt")
@@ -67,7 +67,7 @@ class HuggingFaceChemLLM:
                     outputs = self.model.generate(
                         inputs["input_ids"],
                         attention_mask=inputs.get("attention_mask"),
-                        max_new_tokens=min(max_tokens, 256),
+                        max_new_tokens=min(max_tokens, 512),
                         do_sample=False,  # Greedy decoding - most stable
                         temperature=None,  # Ignore when do_sample=False
                         top_p=None,  # Ignore when do_sample=False
@@ -178,41 +178,30 @@ class RetrosynthesisEngine:
         ]
     
     def _local_llm(self, prompt: str, timeout: int = 180) -> str:
-        """Call a local chemistry LLM for retrosynthesis prompts.
+        """Call the project's chemistry LLM for retrosynthesis prompts.
 
         Preference order:
         1. `chemllm` package client (if installed)
         2. Hugging Face ChemLLM model via `transformers` (if available)
-        3. Local Ollama HTTP server as a last resort
+
+        Note: Ollama/Mistral fallback has been removed. If no local ChemLLM
+        is available, this method returns a clear error string instead of
+        attempting to call external Mistral services.
         """
 
-        # Try chem_client if available
-        if getattr(self, 'chem_client', None) is not None:
-            try:
-                if hasattr(self.chem_client, 'generate'):
-                    return self.chem_client.generate(prompt=prompt)
-                elif hasattr(self.chem_client, 'create'):
-                    return self.chem_client.create(prompt=prompt)
-                else:
-                    return str(self.chem_client)
-            except Exception:
-                # Fall through to Ollama fallback
-                pass
+        client = getattr(self, 'chem_client', None)
+        if client is None:
+            return "[LLM unavailable: ChemLLM client not configured]"
 
-        # Fallback to Ollama HTTP endpoint
         try:
-            url = "http://127.0.0.1:11434/api/generate"
-            payload = {
-                "model": "mistral",
-                "prompt": prompt,
-                "stream": False
-            }
-            response = requests.post(url, json=payload, timeout=timeout)
-            response.raise_for_status()
-            data = response.json()
-            return data.get("response", "").strip()
-        except requests.exceptions.RequestException as e:
-            return f"[LLM unavailable: {e}]"
+            if hasattr(client, 'generate'):
+                return client.generate(prompt=prompt)
+            elif hasattr(client, 'create'):
+                return client.create(prompt=prompt)
+            else:
+                return str(client)
+        except Exception as e:
+            return f"[LLM error: {type(e).__name__}: {str(e)[:200]}]"
     
     def _analyze_molecule(self, smiles: str) -> Dict[str, Any]:
         """Analyze molecular properties using RDKit."""
@@ -412,46 +401,9 @@ Be specific about reagents, conditions, and protecting groups where relevant."""
         retro_analysis = self._local_llm(retro_prompt)
         result["retrosynthetic_routes"] = retro_analysis
         
-        # Step 3: Generate forward synthesis for best route
-        forward_prompt = f"""Based on your retrosynthetic analysis for {compound_name}, provide a detailed FORWARD synthesis protocol for the recommended route.
-
-Format as:
-
-**Step 1: [Reaction name]**
-Starting materials: [Specific compounds with quantities]
-Reagents: [Specific reagents, solvents, catalysts]
-Conditions: [Temperature, time, atmosphere]
-Workup: [How to isolate product]
-Expected yield: [Percentage]
-Characterization: [Key NMR signals, MS, IR]
-
-**Step 2: [Next reaction]**
-[Same format]
-
-Continue for all steps.
-
-Include:
-- Specific protecting group strategies if needed
-- Purification methods (column chromatography, recrystallization, etc.)
-- Critical safety considerations
-- Scale-up considerations for each step"""
-
-        forward_synthesis = self._local_llm(forward_prompt, timeout=240)
-        result["forward_synthesis"] = forward_synthesis
-        
-        # Step 4: Commercial availability assessment
-        if smiles:
-            availability_prompt = f"""For the synthesis of {compound_name} (SMILES: {smiles}), assess:
-
-1. Which starting materials in the proposed routes are commercially available from major suppliers (Sigma-Aldrich, TCI, Alfa Aesar)?
-2. Estimated cost per gram for key starting materials (order of magnitude: $, $$, $$$, $$$$)
-3. Which intermediates might need to be synthesized in-house vs purchased?
-4. Overall commercial feasibility score (0-100)
-
-Provide a brief practical assessment."""
-
-            availability = self._local_llm(availability_prompt)
-            result["commercial_availability"] = availability
+        # Skip forward synthesis and availability for speed - can be added later if needed
+        result["forward_synthesis"] = "[Skipped for performance - use recommended route from retrosynthetic analysis]"
+        result["commercial_availability"] = "[Skipped for performance - focus on route feasibility above]"
         
         return result
     
