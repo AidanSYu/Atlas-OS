@@ -11,6 +11,7 @@ Key difference from retrosynthesis:
 import re
 from typing import Dict, List, Any, Optional
 from .retrosynthesis import RetrosynthesisEngine
+from .llm_client import call_ollama
 
 
 class ManufacturabilityAgent:
@@ -34,24 +35,10 @@ class ManufacturabilityAgent:
     def __init__(self):
         """Initialize with retrosynthesis engine for chemical analysis."""
         self.retro_engine = RetrosynthesisEngine()
-        self.chem_client = self.retro_engine.chem_client  # Reuse ChemLLM instance
     
     def _llm_assessment(self, prompt: str) -> str:
         """Query ChemLLM for manufacturability analysis."""
-        if self.chem_client is None:
-            return "[ChemLLM unavailable]"
-        
-        try:
-            if hasattr(self.chem_client, 'generate'):
-                response = self.chem_client.generate(prompt=prompt, max_tokens=512)
-                # Ensure response is a string
-                if response is None:
-                    return "[ChemLLM returned None]"
-                return str(response) if not isinstance(response, str) else response
-            else:
-                return "[ChemLLM client missing generate method]"
-        except Exception as e:
-            return f"[Error: {str(e)[:150]}]"
+        return call_ollama(prompt, max_tokens=512)
     
     def assess_scalability(self, 
                           compound_name: str, 

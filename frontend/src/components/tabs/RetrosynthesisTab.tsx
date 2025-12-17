@@ -65,7 +65,7 @@ export default function RetrosynthesisTab({ project }: RetrosynthesisTabProps) {
       <div className="analysis-form">
         <div className="form-section">
           <h3>Compound Information</h3>
-          
+
           <div className="form-group">
             <label>Compound Name *</label>
             <input
@@ -168,9 +168,50 @@ export default function RetrosynthesisTab({ project }: RetrosynthesisTabProps) {
               <div className="result-card full-width">
                 <h4>Retrosynthetic Analysis</h4>
                 <div className="retro-analysis">
-                  <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', lineHeight: '1.6' }}>
-                    {result.analysis.retrosynthetic_routes}
-                  </pre>
+                  {result.analysis.retrosynthetic_routes.error ? (
+                    <div className="alert alert-error">
+                      {result.analysis.retrosynthetic_routes.error}
+                      {result.analysis.retrosynthetic_routes.raw && (
+                        <details>
+                          <summary>Raw Output</summary>
+                          <pre>{result.analysis.retrosynthetic_routes.raw}</pre>
+                        </details>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="reaction-step-card">
+                      <div className="step-header">
+                        <span className="step-badge">Step {result.analysis.retrosynthetic_routes.step_id || 1}</span>
+                        <h4 className="reaction-title">{result.analysis.retrosynthetic_routes.reaction_type}</h4>
+                      </div>
+
+                      <div className="reaction-body">
+                        <div className="target-molecule">
+                          <strong>Target:</strong> {result.analysis.retrosynthetic_routes.target}
+                        </div>
+
+                        <div className="reaction-arrow">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" height="30" width="30">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                          </svg>
+                        </div>
+
+                        <div className="precursors-grid">
+                          {result.analysis.retrosynthetic_routes.precursors?.map((p: any, idx: number) => (
+                            <div key={idx} className="precursor-card">
+                              <strong>{p.name}</strong>
+                              {p.smiles && <div className="smiles-code">{p.smiles}</div>}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="rationale-box">
+                        <strong>Strategic Rationale:</strong>
+                        <p>{result.analysis.retrosynthetic_routes.rationale}</p>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             )}

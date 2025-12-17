@@ -27,9 +27,9 @@ class ResearchDiseaseResponse(BaseModel):
     summary: str
     sources: List[str]
 
-from agents.researcher import ResearcherAgent
-from agents.retrosynthesis import RetrosynthesisEngine
-from agents.manufacturer import ManufacturabilityAgent
+from backend.agents.researcher import ResearcherAgent
+from backend.agents.retrosynthesis import RetrosynthesisEngine
+from backend.agents.manufacturer import ManufacturabilityAgent
 import threading
 import time
 import uuid
@@ -84,6 +84,7 @@ def _run_deep_analysis_task(task_id: str, disease: str, pathway_text: str):
 
 @app.post("/api/researcher/research", response_model=ResearchDiseaseResponse)
 def researcher_research(req: ResearchDiseaseRequest):
+    print(f"Researcher research requested: {req.disease}")
     agent = ResearcherAgent()
     result = agent.research_disease(req.disease)
     return ResearchDiseaseResponse(**result)
@@ -284,13 +285,23 @@ class RetrosynthesisRequest(BaseModel):
 @app.post("/api/retrosynthesis/analyze")
 def retrosynthesis_analyze(req: RetrosynthesisRequest):
     """Analyze retrosynthetic routes for a compound."""
-    retro = RetrosynthesisEngine()
-    result = retro.retrosynthesis_analysis(req.compound_name, smiles=req.smiles)
-    return {
-        "compound_name": req.compound_name,
-        "smiles": req.smiles,
-        "analysis": result
-    }
+    try:
+        retro = RetrosynthesisEngine()
+        result = retro.retrosynthesis_analysis(req.compound_name, smiles=req.smiles)
+        return {
+            "compound_name": req.compound_name,
+            "smiles": req.smiles,
+            "analysis": result
+        }
+    except Exception as e:
+        print(f"Retrosynthesis error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "compound_name": req.compound_name,
+            "smiles": req.smiles,
+            "analysis": {"error": str(e)}
+        }
 
 
 # Manufacturing-specific endpoints
@@ -327,15 +338,20 @@ class ChatRequest(BaseModel):
 @app.post("/api/research/chat")
 def research_chat(req: ChatRequest):
     """Professional research assistant chatbot with technical terminology."""
-    researcher = ResearcherAgent()
-    
+    print(f"Chat request: {req.message[:50]}... Context: {str(req.disease_context)[:20]}")
     try:
-        result = researcher.professional_chat(
+        agent = ResearcherAgent()
+        print("ResearcherAgent initialized")
+        result = agent.professional_chat(
             question=req.message,
             context=req.disease_context or ""
         )
+        print("Chat response generated successfully")
         return result
     except Exception as e:
+        print(f"Chat error: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return {
             "response": f"Error: {str(e)}. Please ensure Ollama is running with llama3.2:1b model."
         }
