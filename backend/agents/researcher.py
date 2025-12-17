@@ -1,48 +1,14 @@
 import requests
 from typing import List
-from duckduckgo_search import DDGS
+from googlesearch import search
 from bs4 import BeautifulSoup
 import json
 from typing import Dict
 import re
+from .llm_client import call_ollama
 
 class ResearcherAgent:
-    def _local_llm(self, prompt: str, max_tokens: int = 2048) -> str:
-        """Query the local Ollama server for research prompts using `llama3.2:1b`.
 
-        Research tasks often require broad, web-focused models. This method
-        uses a local Ollama HTTP server (model `llama3.2:1b`) to handle those
-        prompts. If Ollama is not running, it raises a clear RuntimeError
-        explaining how to start and pull the model.
-        """
-
-        try:
-            url = "http://127.0.0.1:11434/api/generate"
-            payload = {
-                "model": "llama3.2:1b",
-                "prompt": prompt,
-                "stream": False,
-                "num_predict": max_tokens,
-            }
-            response = requests.post(url, json=payload, timeout=120)
-            response.raise_for_status()
-            data = response.json()
-            return data.get("response", "").strip()
-        except requests.exceptions.RequestException as e:
-            error_msg = str(e)
-            if "Connection refused" in error_msg or "ConnectTimeout" in error_msg or "Max retries exceeded" in error_msg:
-                raise RuntimeError(
-                    "Ollama is not running or unreachable. To enable research LLMs:\n"
-                    "1. Install Ollama: https://ollama.ai (or use your platform's installer)\n"
-                    "2. Pull the model: `ollama pull llama3.2:1b`\n"
-                    "3. Start the server: `ollama serve`"
-                )
-            elif "Read timed out" in error_msg:
-                raise RuntimeError(
-                    "Ollama request timed out. The model may be taking too long; try a smaller prompt or ensure the model is downloaded."
-                )
-            else:
-                raise RuntimeError(f"Ollama HTTP error: {error_msg}")
 
     def _scrape_url(self, url: str) -> str:
         """Scrape text content from a URL and extract DOI if present."""
@@ -62,20 +28,35 @@ class ResearcherAgent:
         return list(set(dois))[:5]  # Return up to 5 unique DOIs
 
     def _search_web(self, query: str, num: int = 5):
-        """Search the web using DuckDuckGo."""
+        """Search the web using Google Search."""
         try:
-            results = list(DDGS().text(query, max_results=num))
+            print(f"Searching Google for: {query}")
+            # googlesearch.search returns iterator of URLs
+            urls = list(search(query, num_results=num, advanced=True))
+            
             clean = []
-            for r in results:
-                url = r.get("href") or r.get("url") or r.get("link")
-                if url:
+            for r in urls:
+                # r is a SearchResult object if advanced=True, else string
+                # googlesearch-python 1.2+ with advanced=True returns objects with .url, .title, .description
+                try:
                     clean.append({
-                        "url": url, 
-                        "title": r.get("title", ""),
-                        "snippet": r.get("body", "")
+                        "url": r.url,
+                        "title": r.title,
+                        "snippet": r.description
                     })
+                except AttributeError:
+                    # Fallback if it returns just strings (older versions)
+                    if isinstance(r, str):
+                        clean.append({
+                            "url": r,
+                            "title": r,
+                            "snippet": ""
+                        })
+
+            print(f"Found {len(clean)} results")
             return clean
-        except Exception:
+        except Exception as e:
+            print(f"Search error: {e}")
             return []
 
     def professional_chat(self, question: str, context: str = "") -> Dict[str, any]:
@@ -130,7 +111,7 @@ Question: {question}
 
 Answer the question directly and professionally. For chemistry questions, use technical terminology and chemical nomenclature (IUPAC, SMILES, SMARTS) when appropriate. For simple questions, be brief. For complex topics, provide detailed explanations."""
 
-        response = self._local_llm(prompt, max_tokens=1500)
+        response = call_ollama(prompt, max_tokens=1500)
         
         return {
             "response": response,
@@ -212,7 +193,27 @@ Answer the question directly and professionally. For chemistry questions, use te
         
         Returns detailed pathways with molecular targets, mechanisms, and clinical relevance.
         """
+        # Step 1: Search for relevant pathway information
+        search_query = f"{disease} therapeutic pathways mechanism drug targets"
+        search_results = self._search_web(search_query, num=5)
+        
+        # Step 2: Scrape content
+        extracted = []
+        for r in search_results:
+            url = r.get("url")
+            if not url:
+                continue
+            content = self._scrape_url(url)
+            extracted.append({"url": url, "content": content[:2000]})
+        
+        # Step 3: Combine scraped content
+        combined_text = "\n\n".join(f"Source: {e['url']}\n{e['content']}" for e in extracted)
+
         prompt = f"""You are a translational medicine expert specializing in {disease}. 
+
+Based on the following research on {disease} pathways:
+
+{combined_text[:10000]}
 
 Generate 3-4 distinct therapeutic pathways for treating {disease}. For each pathway, provide:
 
@@ -234,10 +235,10 @@ Format as JSON array:
   }}
 ]
 
-Use precise pharmacological and biochemical terminology. Focus on scientifically validated approaches.
+Use precise pharmacological and biochemical terminology. Focus on scientifically validated approaches found in the text.
 Return ONLY valid JSON, no markdown formatting."""
 
-        resp = self._local_llm(prompt, max_tokens=2048)
+        resp = call_ollama(prompt, max_tokens=2048)
         
         # Clean response - remove markdown code blocks if present
         resp = resp.strip()
@@ -336,7 +337,7 @@ Return ONLY valid JSON with this structure:
 
 Do not include any text outside the JSON structure. No markdown code blocks.
 """
-        resp = self._local_llm(prompt, max_tokens=2048)
+        resp = call_ollama(prompt, max_tokens=2048)
         
         # Clean response - remove markdown code blocks if present
         resp = resp.strip()

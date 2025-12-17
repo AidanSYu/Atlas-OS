@@ -42,27 +42,24 @@ interface Pathway {
   compounds: string[]
 }
 
-type TabType = 'chatbot' | 'literature' | 'pathways'
+type TabType = 'chatbot' | 'pathways'
 
 export default function ResearchTab({ project }: ResearchTabProps) {
   const [activeTab, setActiveTab] = useState<TabType>('chatbot')
-  
+
   // Chatbot state
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
       role: 'assistant',
-      content: `Hello! I'm your professional pharmaceutical research assistant for ${project.disease}. I use technical terminology and can discuss molecular mechanisms, pharmacokinetics, clinical trial design, and regulatory considerations. How can I assist you?`,
+      content: `Hello! I'm your professional pharmaceutical research assistant for ${project.disease}. I can answer technical questions, explain mechanisms, and search for scientific literature using real-time web access. Ask me anything about ${project.disease}.`,
       timestamp: new Date()
     }
   ])
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
 
-  // Literature search state
-  const [literatureQuery, setLiteratureQuery] = useState('')
-  const [papers, setPapers] = useState<Paper[]>([])
-  const [isSearching, setIsSearching] = useState(false)
+
 
   // Pathways state
   const [pathways, setPathways] = useState<Pathway[]>([])
@@ -122,42 +119,7 @@ export default function ResearchTab({ project }: ResearchTabProps) {
     }
   }
 
-  // Literature search handler
-  const handleLiteratureSearch = async () => {
-    if (!literatureQuery.trim() || isSearching) return
 
-    setIsSearching(true)
-    setPapers([])
-
-    try {
-      console.log('Searching for:', literatureQuery)
-      const response = await fetch('/api/research/literature', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          research_question: literatureQuery
-        })
-      })
-
-      console.log('Response status:', response.status)
-
-      if (!response.ok) {
-        throw new Error(`Literature search failed: ${response.statusText}`)
-      }
-
-      const data = await response.json()
-      console.log('Received data:', data)
-      console.log('Papers array:', data.papers)
-      console.log('Papers length:', data.papers?.length)
-      
-      setPapers(data.papers || [])
-    } catch (error: any) {
-      console.error('Literature search error:', error)
-      alert(`Search failed: ${error.message}`)
-    } finally {
-      setIsSearching(false)
-    }
-  }
 
   // Pathways handler
   const handleGeneratePathways = async () => {
@@ -192,7 +154,7 @@ export default function ResearchTab({ project }: ResearchTabProps) {
     <div className="research-tab">
       <div className="research-header">
         <div className="tab-navigation">
-          <button 
+          <button
             className={`tab-btn ${activeTab === 'chatbot' ? 'active' : ''}`}
             onClick={() => setActiveTab('chatbot')}
           >
@@ -201,16 +163,8 @@ export default function ResearchTab({ project }: ResearchTabProps) {
             </svg>
             Professional Chatbot
           </button>
-          <button 
-            className={`tab-btn ${activeTab === 'literature' ? 'active' : ''}`}
-            onClick={() => setActiveTab('literature')}
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
-            </svg>
-            Literature Search
-          </button>
-          <button 
+
+          <button
             className={`tab-btn ${activeTab === 'pathways' ? 'active' : ''}`}
             onClick={() => setActiveTab('pathways')}
           >
@@ -297,8 +251,8 @@ export default function ResearchTab({ project }: ResearchTabProps) {
                   }}
                   rows={1}
                 />
-                <button 
-                  className="send-btn" 
+                <button
+                  className="send-btn"
                   onClick={handleSend}
                   disabled={!input.trim() || isLoading}
                 >
@@ -311,73 +265,7 @@ export default function ResearchTab({ project }: ResearchTabProps) {
           </div>
         )}
 
-        {/* LITERATURE SEARCH TAB */}
-        {activeTab === 'literature' && (
-          <div className="literature-section">
-            <div className="search-header">
-              <h2>Scientific Literature Search</h2>
-              <p>Find real research papers with DOI references</p>
-            </div>
 
-            <div className="search-bar">
-              <input
-                type="text"
-                className="literature-input"
-                placeholder="Enter your research question (e.g., 'EGFR inhibitors for lung cancer')"
-                value={literatureQuery}
-                onChange={(e) => setLiteratureQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault()
-                    handleLiteratureSearch()
-                  }
-                }}
-              />
-              <button 
-                className="search-btn" 
-                onClick={handleLiteratureSearch}
-                disabled={isSearching || !literatureQuery.trim()}
-              >
-                {isSearching ? 'Searching...' : 'Search Papers'}
-              </button>
-            </div>
-
-            {papers.length > 0 && (
-              <div className="papers-list">
-                <h3>Found {papers.length} Research Papers</h3>
-                {papers.map(paper => (
-                  <div key={paper.id} className="paper-card">
-                    <div className="paper-header">
-                      <div className="paper-number">#{paper.id}</div>
-                      <h4>{paper.title}</h4>
-                      {paper.doi && (
-                        <span className="doi-badge">DOI: {paper.doi}</span>
-                      )}
-                    </div>
-                    <p className="paper-description">{paper.description}</p>
-                    <div className="paper-footer">
-                      <a href={paper.url} target="_blank" rel="noopener noreferrer" className="paper-link">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                        </svg>
-                        View Full Paper
-                      </a>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {!isSearching && papers.length === 0 && (
-              <div className="empty-state">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                </svg>
-                <p>Enter a research question to find relevant scientific papers</p>
-              </div>
-            )}
-          </div>
-        )}
 
         {/* DISEASE PATHWAYS TAB */}
         {activeTab === 'pathways' && (
@@ -401,8 +289,8 @@ export default function ResearchTab({ project }: ResearchTabProps) {
                   }
                 }}
               />
-              <button 
-                className="generate-btn" 
+              <button
+                className="generate-btn"
                 onClick={handleGeneratePathways}
                 disabled={isGeneratingPathways || !pathwayDisease.trim()}
               >

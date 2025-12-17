@@ -5,129 +5,8 @@ Uses RDKit + LLM to provide retrosynthesis analysis
 
 import requests
 from typing import Dict, List, Any, Optional
+from backend.agents.llm_client import call_ollama
 
-# Try to import chemllm package; if unavailable, we'll fall back to a HF wrapper below
-try:
-    from chemllm import ChemLLMClient
-except Exception:
-    ChemLLMClient = None
-
-
-class HuggingFaceChemLLM:
-    """Minimal Hugging Face wrapper for ChemLLM models.
-
-    Loads a ChemLLM model from Hugging Face and exposes `generate(prompt, ...)`.
-    This is a best-effort fallback — loading requires `transformers` and `torch`.
-    """
-
-    def __init__(self, model_id: str = "AI4Chem/ChemLLM-7B-Chat-1.5-DPO", use_quantization: bool = True):
-        try:
-            from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-            import torch
-        except Exception as e:
-            raise RuntimeError(f"HuggingFace dependencies missing: {e}")
-
-        self.model_id = model_id
-        self.torch = torch
-        self.tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
-
-        try:
-            if torch.cuda.is_available():
-                if use_quantization:
-                    # 4-bit quantization for faster inference and lower memory
-                    quantization_config = BitsAndBytesConfig(
-                        load_in_4bit=True,
-                        bnb_4bit_compute_dtype=torch.float16,
-                        bnb_4bit_use_double_quant=True,
-                        bnb_4bit_quant_type="nf4"
-                    )
-                    self.model = AutoModelForCausalLM.from_pretrained(
-                        model_id,
-                        quantization_config=quantization_config,
-                        device_map="auto",
-                        trust_remote_code=True,
-                    )
-                else:
-                    self.model = AutoModelForCausalLM.from_pretrained(
-                        model_id,
-                        dtype=torch.float16,
-                        device_map="auto",
-                        trust_remote_code=True,
-                    )
-            else:
-                if use_quantization:
-                    # 8-bit quantization for CPU (4-bit requires CUDA)
-                    quantization_config = BitsAndBytesConfig(
-                        load_in_8bit=True,
-                    )
-                    self.model = AutoModelForCausalLM.from_pretrained(
-                        model_id,
-                        quantization_config=quantization_config,
-                        device_map="auto",
-                        trust_remote_code=True,
-                    )
-                else:
-                    self.model = AutoModelForCausalLM.from_pretrained(
-                        model_id,
-                        torch_dtype=torch.float32,
-                        low_cpu_mem_usage=True,
-                        trust_remote_code=True,
-                    )
-        except Exception as e:
-            raise RuntimeError(f"Failed to load HF model {model_id}: {e}")
-
-    def generate(self, prompt: str, model: str = None, max_tokens: int = 512):
-        """Generate response using simple, direct generation without hanging issues."""
-        try:
-            inputs = self.tokenizer(prompt, return_tensors="pt")
-            
-            # Move to device
-            try:
-                device = next(self.model.parameters()).device
-                inputs = {k: v.to(device) for k, v in inputs.items()}
-            except Exception:
-                pass
-
-            # Generate with minimal, stable parameters (no generation_config to avoid hanging)
-            try:
-                with self.torch.no_grad():
-                    outputs = self.model.generate(
-                        inputs["input_ids"],
-                        attention_mask=inputs.get("attention_mask"),
-                        max_new_tokens=min(max_tokens, 512),
-                        do_sample=False,  # Greedy decoding - most stable
-                        temperature=None,  # Ignore when do_sample=False
-                        top_p=None,  # Ignore when do_sample=False
-                        top_k=None,  # Ignore when do_sample=False
-                        use_cache=False,  # Disable cache to avoid hanging
-                        pad_token_id=self.tokenizer.eos_token_id,
-                        eos_token_id=self.tokenizer.eos_token_id,
-                    )
-            except RuntimeError as gen_err:
-                if "out of memory" in str(gen_err).lower():
-                    return "[ChemLLM: Out of memory - try smaller prompt]"
-                else:
-                    return f"[ChemLLM generation error: {str(gen_err)[:80]}]"
-            except Exception as gen_err:
-                return f"[ChemLLM generation error: {type(gen_err).__name__}: {str(gen_err)[:60]}]"
-            
-            if outputs is None:
-                return "[ChemLLM: No output generated]"
-            
-            # Decode output safely
-            try:
-                # Handle batch output (usually just 1 sequence)
-                if len(outputs.shape) > 1:
-                    text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-                else:
-                    text = self.tokenizer.decode(outputs, skip_special_tokens=True)
-            except Exception as decode_err:
-                return f"[ChemLLM decode error: {str(decode_err)[:50]}]"
-            
-            return text if text else "[ChemLLM: Empty response]"
-        except Exception as e:
-            import traceback
-            return f"[ChemLLM error: {type(e).__name__}: {str(e)[:80]}]"
 
 try:
     from rdkit import Chem
@@ -135,6 +14,9 @@ try:
     RDKIT_AVAILABLE = True
 except ImportError:
     RDKIT_AVAILABLE = False
+
+
+
 
 
 class RetrosynthesisEngine:
@@ -145,24 +27,7 @@ class RetrosynthesisEngine:
     
     def __init__(self):
         self.common_reactions = self._load_reaction_templates()
-        # Initialize a chemistry LLM client when possible
-        self.chem_client: Optional[object] = None
-        if ChemLLMClient is not None:
-            try:
-                self.chem_client = ChemLLMClient()
-                print("[RETRO] ChemLLM client initialized successfully")
-            except Exception as e:
-                print(f"[RETRO] ChemLLM client failed: {e}")
-                self.chem_client = None
 
-        if self.chem_client is None:
-            try:
-                print("[RETRO] Loading HuggingFace ChemLLM (this may take a while on first run)...")
-                self.chem_client = HuggingFaceChemLLM()
-                print("[RETRO] HuggingFace ChemLLM loaded successfully")
-            except Exception as e:
-                print(f"[RETRO] HuggingFace ChemLLM failed to load: {e}")
-                self.chem_client = None
     
     def _load_reaction_templates(self) -> List[Dict[str, str]]:
         """Common organic chemistry reaction templates."""
@@ -209,32 +74,7 @@ class RetrosynthesisEngine:
             }
         ]
     
-    def _local_llm(self, prompt: str, timeout: int = 180) -> str:
-        """Call Ollama for retrosynthesis prompts using llama3.2:1b.
-        
-        Falls back from ChemLLM since it's too large for most systems.
-        Uses the same Ollama instance as the research agent.
-        """
-        try:
-            url = "http://127.0.0.1:11434/api/generate"
-            payload = {
-                "model": "llama3.2:1b",
-                "prompt": prompt,
-                "stream": False,
-                "num_predict": 2048,
-            }
-            response = requests.post(url, json=payload, timeout=timeout)
-            response.raise_for_status()
-            data = response.json()
-            return data.get("response", "").strip()
-        except requests.exceptions.RequestException as e:
-            error_msg = str(e)
-            if "Connection refused" in error_msg or "ConnectTimeout" in error_msg:
-                return "[Ollama is not running. Please start it with: ollama serve]"
-            elif "Read timed out" in error_msg:
-                return "[Ollama request timed out - model may be taking too long]"
-            else:
-                return f"[Ollama HTTP error: {error_msg}]"
+
     
     def _analyze_molecule(self, smiles: str) -> Dict[str, Any]:
         """Analyze molecular properties using RDKit."""
@@ -352,7 +192,7 @@ class RetrosynthesisEngine:
             "molecular_properties": {},
             "functional_groups": [],
             "strategic_disconnections": [],
-            "retrosynthetic_routes": [],
+            "retrosynthetic_routes": {},
             "forward_synthesis": "",
             "complexity_assessment": "",
             "commercial_availability": ""
@@ -405,63 +245,39 @@ Molecular Properties:
 {functional_groups_text}
 {disconnections_text}
 
-Provide a detailed step-by-step retrosynthetic analysis similar to SciFinder. Include:
+Perform a 1-step retrosynthetic disconnection of the target molecule.
+Identify the main immediate precursors.
 
-**RETROSYNTHETIC ANALYSIS:**
+Format the output as a JSON object with this EXACT structure:
+{{
+  "target": "{compound_name}",
+  "step_id": 1,
+  "reaction_type": "Name of the disconnection reaction (e.g., Amide Hydrolysis)",
+  "rationale": "Why this disconnection is strategic...",
+  "precursors": [
+    {{ "name": "Precursor 1 Name", "smiles": "Precursor 1 SMILES (or empty)" }},
+    {{ "name": "Precursor 2 Name", "smiles": "Precursor 2 SMILES (or empty)" }}
+  ]
+}}
 
-**Strategy Overview:**
-Briefly describe the overall synthetic strategy (convergent, linear, protecting group strategy, etc.)
+Return ONLY valid JSON. No markdown blocking.
+"""
 
-**Retrosynthetic Steps (work backwards from target to starting materials):**
-
-Step 1: Target Molecule → Precursor 1
-- Bond to disconnect: [describe specific bond]
-- Reaction type: [name of reaction, e.g., "Ester formation", "Friedel-Crafts acylation"]
-- Rationale: [why this disconnection makes sense]
-- Precursor structures: [describe or give SMILES if possible]
-
-Step 2: Precursor 1 → Precursor 2 + Precursor 3
-- Bond to disconnect: [specific bond]
-- Reaction type: [reaction name]
-- Rationale: [strategic reasoning]
-- Precursor structures: [describe]
-
-Step 3: [Continue until reaching commercially available starting materials]
-
-**Starting Materials (commercially available):**
-1. [Compound name/SMILES]
-2. [Compound name/SMILES]
-3. [Additional materials]
-
-**Forward Synthesis (actual lab steps):**
-
-Step 1: Starting Material A + Starting Material B → Intermediate 1
-- Reagents: [specific reagents]
-- Conditions: [temperature, solvent, time]
-- Expected yield: [%]
-
-Step 2: Intermediate 1 → Intermediate 2
-- Reagents: [specific]
-- Conditions: [details]
-- Expected yield: [%]
-
-[Continue to target molecule]
-
-**Complexity Assessment:**
-- Overall difficulty: [Easy/Moderate/Difficult/Very Difficult]
-- Number of steps: [X]
-- Expected overall yield: [%]
-- Key challenges: [list 2-3 main synthetic challenges]
-- Estimated time: [weeks/months]
-
-**Alternative Routes (brief):**
-Route 2: [Quick description of alternative disconnection strategy]
-Route 3: [Another alternative]
-
-Provide detailed, practical information suitable for a synthetic chemist planning this synthesis."""
-
-        retro_analysis = self._local_llm(retro_prompt)
-        result["retrosynthetic_routes"] = retro_analysis
+        try:
+            retro_json_str = call_ollama(retro_prompt)
+            # Cleanup potential markdown
+            retro_json_str = retro_json_str.strip()
+            if retro_json_str.startswith('```'):
+                lines = retro_json_str.split('\n')
+                if lines[0].startswith('```'): lines = lines[1:]
+                if lines[-1].strip() == '```': lines = lines[:-1]
+                retro_json_str = '\n'.join(lines).strip()
+            
+            import json
+            reaction_tree = json.loads(retro_json_str)
+            result["retrosynthetic_routes"] = reaction_tree
+        except Exception as e:
+            result["retrosynthetic_routes"] = {"error": f"Failed to generate structured route: {str(e)}", "raw": retro_json_str if 'retro_json_str' in locals() else ""}
         
         # Skip forward synthesis and availability for speed - can be added later if needed
         result["forward_synthesis"] = "[Skipped for performance - use recommended route from retrosynthetic analysis]"
