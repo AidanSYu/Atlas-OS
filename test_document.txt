@@ -1,0 +1,21 @@
+Test Document for GraphRAG
+
+This is a test document to verify that our GraphRAG system is working correctly.
+
+Key Entities:
+- Benzene: An aromatic hydrocarbon compound
+- Catalyst: A substance that increases reaction rate
+- Photocatalysis: A chemical reaction accelerated by light
+- Titanium dioxide: A common photocatalyst material
+
+Experimental Procedure:
+1. Prepare the catalyst solution
+2. Add benzene substrate
+3. Expose to UV light
+4. Measure reaction rate
+
+Results:
+The photocatalytic reaction showed 85% conversion efficiency with titanium dioxide catalyst under UV irradiation at 365nm wavelength.
+
+Conclusion:
+This experiment demonstrates the effectiveness of titanium dioxide as a photocatalyst for benzene degradation.

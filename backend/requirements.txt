@@ -15,7 +15,8 @@ ollama==0.1.6
 
 # Document Processing
 pypdf==4.0.1
-python-magic-bin==0.4.14  # For file type detection on Windows
+python-magic-bin==0.4.14; platform_system == "Windows"  # For file type detection on Windows
+python-magic==0.4.27; platform_system != "Windows"
 
 # NER & Entity Extraction
 spacy==3.7.2

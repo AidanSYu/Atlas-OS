@@ -33,8 +33,9 @@ class Settings(BaseSettings):
     QDRANT_COLLECTION: str = "atlas_documents"
     
     # Ollama Configuration
-    OLLAMA_BASE_URL: str = "http://localhost:11434"
-    OLLAMA_MODEL: str = "llama3.2:1b"
+    # Auto-detect Docker environment
+    OLLAMA_BASE_URL: str = "http://host.docker.internal:11434"  # Default for Docker Desktop
+    OLLAMA_MODEL: str = "llama3"
     OLLAMA_EMBEDDING_MODEL: str = "nomic-embed-text"
     
     # File Storage
