@@ -1,0 +1,27 @@
+# Web Framework
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+
+# Database
+psycopg2-binary==2.9.9
+sqlalchemy==2.0.25
+
+# Vector Store
+qdrant-client==1.7.0
+
+# LLM & Embeddings
+ollama==0.1.6
+
+# Document Processing
+pypdf==4.0.1
+python-magic-bin==0.4.14  # For file type detection on Windows
+
+# NER & Entity Extraction
+spacy==3.7.2
+
+# Utilities
+pydantic==2.5.3
+pydantic-settings==2.1.0
+python-dotenv==1.0.0
+aiofiles==23.2.1
