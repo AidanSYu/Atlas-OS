@@ -138,4 +138,15 @@ export const api = {
     const data = await response.json();
     return data.entity_types;
   },
+
+  async getFullGraph(documentId?: string): Promise<{ nodes: EntityInfo[]; edges: RelationshipInfo[] }> {
+    const url = documentId 
+      ? `${API_BASE_URL}/graph/full?document_id=${encodeURIComponent(documentId)}`
+      : `${API_BASE_URL}/graph/full`;
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Failed to get full graph: ${response.statusText}`);
+    }
+    return response.json();
+  },
 };

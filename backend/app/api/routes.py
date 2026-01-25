@@ -114,15 +114,31 @@ async def chat(request: ChatRequest):
     - LLM synthesis (Ollama) for final answer
     """
     ensure_services()
+    
+    # Robust error handling: attempt to re-initialize if service is None
+    global chat_service
     if chat_service is None:
-        raise HTTPException(status_code=503, detail="Chat service unavailable (vector store / Ollama not reachable)")
+        try:
+            chat_service = ChatService()
+        except Exception as init_error:
+            raise HTTPException(
+                status_code=503, 
+                detail=f"Chat service unavailable (vector store / Ollama not reachable): {str(init_error)}"
+            )
+    
     try:
         result = chat_service.chat(request.query)
         return ChatResponse(**result)
     except Exception as e:
         import traceback
+        import logging
+        logging.error(f"Chat error: {str(e)}")
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Query error: {str(e)}")
+        # Return JSON error detail that frontend can read
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Query error: {str(e)}"
+        )
 
 
 @router.post("/ingest")
@@ -151,12 +167,30 @@ async def ingest_document(file: UploadFile = File(...)):
         # Process through ingestion pipeline
         result = ingestion_service.ingest_document(str(file_path), file.filename)
         
+        # Check if ingestion failed - atomic cleanup: delete file if ingestion failed
+        if result.get("status") == "failed":
+            # Delete the uploaded file immediately if ingestion failed
+            if file_path.exists():
+                try:
+                    file_path.unlink()
+                except Exception as cleanup_error:
+                    # Log but don't fail on cleanup errors
+                    import logging
+                    logging.error(f"Failed to cleanup file after ingestion failure: {cleanup_error}")
+            raise HTTPException(status_code=500, detail=result.get("error", "Processing failed"))
+        
         return result
     
+    except HTTPException:
+        raise
     except Exception as e:
         # Clean up on error
         if file_path.exists():
-            file_path.unlink()
+            try:
+                file_path.unlink()
+            except Exception as cleanup_error:
+                import logging
+                logging.error(f"Failed to cleanup file after error: {cleanup_error}")
         raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
 
 
@@ -274,8 +308,30 @@ async def get_entity_relationships(entity_id: str, direction: str = "both"):
 @router.get("/graph/types")
 async def get_entity_types():
     """Get all node labels (types) with counts."""
+    ensure_services()
+    if graph_service is None:
+        raise HTTPException(status_code=503, detail="Graph service unavailable (DB not reachable)")
     try:
         types = graph_service.get_node_types()
         return {"entity_types": types}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting types: {str(e)}")
+
+
+@router.get("/graph/full")
+async def get_full_graph(document_id: Optional[str] = None):
+    """
+    Get complete graph (nodes + edges) in one request.
+    Prevents graph 'explosion' by loading everything at once instead of lazy-loading edges.
+    
+    Query params:
+    - document_id: Optional filter to get graph for specific document
+    """
+    ensure_services()
+    if graph_service is None:
+        raise HTTPException(status_code=503, detail="Graph service unavailable (DB not reachable)")
+    try:
+        result = graph_service.get_full_graph(document_id=document_id)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting full graph: {str(e)}")

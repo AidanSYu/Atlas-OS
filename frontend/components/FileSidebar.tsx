@@ -60,12 +60,14 @@ export default function FileSidebar({ onFileSelect, selectedDocId }: FileSidebar
     setUploading(true);
     try {
       await api.uploadFile(file);
-      await loadFiles();
+      alert(`Successfully uploaded ${file.name}`);
     } catch (error) {
       console.error('Upload failed:', error);
-      alert('Upload failed. Please try again.');
+      alert(`Upload failed: ${error instanceof Error ? error.message : 'Please try again'}`);
     } finally {
       setUploading(false);
+      // Always reload files after upload attempt to show any partial uploads
+      await loadFiles();
     }
   };
 

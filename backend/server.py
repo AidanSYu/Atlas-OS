@@ -12,6 +12,10 @@ from document_store import DocumentStore
 from knowledge_graph import KnowledgeGraph
 from database import init_db
 
+# Import working services from app structure
+from app.services.chat import ChatService
+from app.services.retrieval import RetrievalService
+
 # Initialize database on startup
 try:
     init_db()
@@ -39,6 +43,10 @@ ingestion_pipeline = IngestionPipeline()
 query_orchestrator = QueryOrchestrator()
 doc_store = DocumentStore()
 knowledge_graph = KnowledgeGraph()
+
+# NEW: Working chat and retrieval services
+chat_service = ChatService()
+retrieval_service = RetrievalService()
 
 # ============================================================
 # PYDANTIC MODELS
@@ -155,22 +163,16 @@ async def ingest_document(file: UploadFile = File(...)):
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     """
-    Query the knowledge layer.
+    Query the knowledge layer using hybrid RAG.
     
-    The AI does not know things - it queries the living knowledge substrate.
-    
-    Query types:
-    - general: Semantic search + graph expansion + synthesis
-    - document: Query specific document
-    - relationship: Find connections between entities
-    - search: Find documents mentioning concept
+    The AI queries the living knowledge substrate:
+    - Vector search (Qdrant) for semantic similarity
+    - Graph expansion (PostgreSQL) for relationships
+    - LLM synthesis (Ollama) for final answer
     """
     try:
-        if request.query_type == "general":
-            response = query_orchestrator.answer_query(request.query)
-        else:
-            # For now, all queries use the general pipeline
-            response = query_orchestrator.answer_query(request.query)
+        # Use working chat service instead of placeholder orchestrator
+        response = chat_service.chat(request.query)
         
         # Ensure response is JSON serializable
         return ChatResponse(

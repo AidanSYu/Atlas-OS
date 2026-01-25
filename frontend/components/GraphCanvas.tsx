@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useRef, useState, useCallback, Suspense, lazy } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useMemo, Suspense, lazy } from 'react';
 import dynamic from 'next/dynamic';
 import { api, EntityInfo, RelationshipInfo } from '@/lib/api';
 import { X } from 'lucide-react';
@@ -25,18 +25,42 @@ export default function GraphCanvas({ height, width }: GraphCanvasProps) {
   const loadGraph = useCallback(async () => {
     try {
       setLoading(true);
-      const ents: EntityInfo[] = await api.listEntities({ limit: 100 });
-      const newNodes: NodeData[] = ents.map(e => ({
+      // Use /graph/full endpoint to get both nodes and edges at once
+      const graphData = await api.getFullGraph();
+      
+      const newNodes: NodeData[] = graphData.nodes.map(e => ({
         id: e.id,
         name: e.name,
         type: e.type,
         color: getNodeColor(e.type),
         properties: { description: e.description, document_id: e.document_id },
       }));
+      
+      const newLinks: LinkData[] = graphData.edges.map(e => ({
+        source: e.source_id,
+        target: e.target_id,
+        label: e.type,
+      }));
+      
       setNodes(newNodes);
-      setLinks([]);
+      setLinks(newLinks);
     } catch (error) {
       console.error('Failed to load graph:', error);
+      // Fallback to just loading nodes if full graph fails
+      try {
+        const ents: EntityInfo[] = await api.listEntities({ limit: 100 });
+        const newNodes: NodeData[] = ents.map(e => ({
+          id: e.id,
+          name: e.name,
+          type: e.type,
+          color: getNodeColor(e.type),
+          properties: { description: e.description, document_id: e.document_id },
+        }));
+        setNodes(newNodes);
+        setLinks([]);
+      } catch (fallbackError) {
+        console.error('Fallback graph load also failed:', fallbackError);
+      }
     } finally {
       setLoading(false);
     }
@@ -66,32 +90,70 @@ export default function GraphCanvas({ height, width }: GraphCanvasProps) {
   const handleNodeClick = useCallback((node: any) => {
     setSelectedNode(node as NodeData);
     // On node click, fetch relationships and expand neighboring nodes
+    // Use functional updates to avoid dependency on nodes/links state
     (async () => {
       try {
         const rels: RelationshipInfo[] = await api.getEntityRelationships(node.id, 'both');
-        const existingIds = new Set(nodes.map(n => n.id));
-        const newNodesToAdd: NodeData[] = [];
-        const newLinks: LinkData[] = [];
-        rels.forEach(r => {
-          // Ensure source node exists
-          if (!existingIds.has(r.source_id)) {
-            newNodesToAdd.push({ id: r.source_id, name: r.source_name || r.source_id, type: 'Entity', color: getNodeColor('Entity') });
-            existingIds.add(r.source_id);
-          }
-          // Ensure target node exists
-          if (!existingIds.has(r.target_id)) {
-            newNodesToAdd.push({ id: r.target_id, name: r.target_name || r.target_id, type: 'Entity', color: getNodeColor('Entity') });
-            existingIds.add(r.target_id);
-          }
-          newLinks.push({ source: r.source_id, target: r.target_id, label: r.type });
+        
+        setNodes(prevNodes => {
+          const existingIds = new Set(prevNodes.map(n => n.id));
+          const newNodesToAdd: NodeData[] = [];
+          
+          rels.forEach(r => {
+            // Ensure source node exists
+            if (!existingIds.has(r.source_id)) {
+              newNodesToAdd.push({ 
+                id: r.source_id, 
+                name: r.source_name || r.source_id, 
+                type: 'Entity', 
+                color: getNodeColor('Entity'),
+                properties: {}
+              });
+              existingIds.add(r.source_id);
+            }
+            // Ensure target node exists
+            if (!existingIds.has(r.target_id)) {
+              newNodesToAdd.push({ 
+                id: r.target_id, 
+                name: r.target_name || r.target_id, 
+                type: 'Entity', 
+                color: getNodeColor('Entity'),
+                properties: {}
+              });
+              existingIds.add(r.target_id);
+            }
+          });
+          
+          // Only add new nodes, don't reset the graph
+          return newNodesToAdd.length > 0 ? [...prevNodes, ...newNodesToAdd] : prevNodes;
         });
-        if (newNodesToAdd.length) setNodes(prev => [...prev, ...newNodesToAdd]);
-        if (newLinks.length) setLinks(prev => [...prev, ...newLinks]);
+        
+        setLinks(prevLinks => {
+          const existingLinkKeys = new Set(
+            prevLinks.map(l => `${l.source}-${l.target}-${l.label}`)
+          );
+          const newLinksToAdd: LinkData[] = [];
+          
+          rels.forEach(r => {
+            const linkKey = `${r.source_id}-${r.target_id}-${r.type}`;
+            if (!existingLinkKeys.has(linkKey)) {
+              newLinksToAdd.push({ 
+                source: r.source_id, 
+                target: r.target_id, 
+                label: r.type 
+              });
+              existingLinkKeys.add(linkKey);
+            }
+          });
+          
+          // Only add new links, don't reset the graph
+          return newLinksToAdd.length > 0 ? [...prevLinks, ...newLinksToAdd] : prevLinks;
+        });
       } catch (e) {
         console.error('Failed to expand relationships', e);
       }
     })();
-  }, [nodes]);
+  }, []); // Remove nodes dependency to prevent graph reset
 
   if (loading) {
     return (
