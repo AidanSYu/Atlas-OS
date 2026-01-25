@@ -7,6 +7,9 @@ export interface FileInfo {
   size_bytes?: number;
   uploaded_at?: string;
   processed_at?: string;
+  total_chunks?: number;
+  processed_chunks?: number;
+  progress?: number;
 }
 
 export interface ChatMessage {

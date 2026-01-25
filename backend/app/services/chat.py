@@ -14,9 +14,9 @@ class ChatService:
     def __init__(self):
         self.retrieval_service = RetrievalService()
     
-    def chat(self, user_question: str) -> Dict[str, Any]:
+    async def chat(self, user_question: str) -> Dict[str, Any]:
         """
-        Process a chat query using hybrid RAG retrieval.
+        Process a chat query using hybrid RAG retrieval (async, GPU-bound).
         
         Args:
             user_question: The user's question
@@ -30,8 +30,8 @@ class ChatService:
                 "context_sources": Dict
             }
         """
-        # Use retrieval service to get answer
-        result = self.retrieval_service.query_atlas(user_question)
+        # Use retrieval service to get answer (async, GPU-bound)
+        result = await self.retrieval_service.query_atlas(user_question)
         
         # Format citations from vector chunks
         citations = []

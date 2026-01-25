@@ -113,6 +113,10 @@ class Document(Base):
     # Status
     status = Column(String, default="pending")  # pending, processing, completed, failed
     
+    # Progress tracking
+    total_chunks = Column(Integer, default=0, nullable=False)
+    processed_chunks = Column(Integer, default=0, nullable=False)
+    
     # Additional metadata (avoid reserved name 'metadata')
     doc_metadata = Column(JSONB, default=dict)
 

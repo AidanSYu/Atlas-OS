@@ -57,6 +57,16 @@ class DocumentService:
                 logger.info(f"Auto-deleting {len(orphaned_docs)} orphaned document records (files missing from disk)")
                 for orphaned_doc in orphaned_docs:
                     try:
+                        # First delete chunks
+                        try:
+                            chunks_deleted = session.query(DocumentChunk).filter(
+                                DocumentChunk.document_id == orphaned_doc.id
+                            ).delete(synchronize_session=False)
+                            logger.debug(f"Deleted {chunks_deleted} chunks for orphaned document {orphaned_doc.id}")
+                        except Exception as e:
+                            logger.debug(f"Error deleting chunks for orphaned document {orphaned_doc.id}: {e}")
+                        
+                        # Then delete the document
                         session.delete(orphaned_doc)
                     except Exception as e:
                         logger.error(f"Error deleting orphaned document {orphaned_doc.id}: {e}")
@@ -193,7 +203,16 @@ class DocumentService:
                 logger.warning(f"Error deleting from Qdrant for document {doc_id_str}: {e}")
                 # Continue with deletion even if Qdrant deletion fails
             
-            # 2. Delete related nodes and edges from knowledge graph
+            # 2. Delete document chunks from PostgreSQL first (before nodes/edges)
+            try:
+                chunks_deleted = session.query(DocumentChunk).filter(
+                    DocumentChunk.document_id == doc_uuid
+                ).delete(synchronize_session=False)
+                logger.info(f"Deleted {chunks_deleted} chunks from PostgreSQL for document {doc_id_str}")
+            except Exception as e:
+                logger.warning(f"Error deleting chunks from PostgreSQL for document {doc_id_str}: {e}")
+            
+            # 3. Delete related nodes and edges from knowledge graph
             try:
                 # Find all nodes associated with this document
                 nodes = session.query(Node).filter(
@@ -218,7 +237,7 @@ class DocumentService:
                 logger.warning(f"Error deleting nodes/edges from knowledge graph for document {doc_id_str}: {e}")
                 # Continue with deletion even if graph cleanup fails
             
-            # 3. Delete file if it exists - graceful deletion: proceed even if file is missing
+            # 4. Delete file if it exists - graceful deletion: proceed even if file is missing
             try:
                 file_path = Path(document.file_path)
                 if file_path.exists():
@@ -231,9 +250,37 @@ class DocumentService:
                 # Log other file deletion errors but don't fail the operation
                 logger.warning(f"Error deleting file {document.file_path}: {e}")
             
-            # 4. Delete from database (cascades to chunks) - always proceed even if file was missing
+            # 5. Delete from database - always proceed even if file was missing
             session.delete(document)
             session.commit()
+            
+            # 6. Final verification - ensure all chunks are deleted from Qdrant
+            # Double-check by trying to find any remaining points
+            try:
+                verify_filter = Filter(
+                    must=[
+                        FieldCondition(
+                            key="doc_id",
+                            match=MatchValue(value=doc_id_str)
+                        )
+                    ]
+                )
+                verify_result = qdrant_client.scroll(
+                    collection_name=settings.QDRANT_COLLECTION,
+                    scroll_filter=verify_filter,
+                    limit=1
+                )
+                remaining_points, _ = verify_result
+                if remaining_points:
+                    logger.warning(f"Found {len(remaining_points)} remaining points in Qdrant for deleted document {doc_id_str}")
+                    # Try to delete them again
+                    remaining_ids = [p.id for p in remaining_points]
+                    qdrant_client.delete(
+                        collection_name=settings.QDRANT_COLLECTION,
+                        points_selector=remaining_ids
+                    )
+            except Exception as e:
+                logger.warning(f"Error verifying Qdrant deletion for document {doc_id_str}: {e}")
             
             logger.info(f"Successfully deleted document {doc_id_str}")
             return True
@@ -251,11 +298,19 @@ class DocumentService:
         if status == "completed":
             status = "indexed"  # Frontend expects "indexed" for completed documents
         
+        # Calculate progress percentage
+        progress = 0.0
+        if document.total_chunks > 0:
+            progress = min(100.0, (document.processed_chunks / document.total_chunks) * 100.0)
+        
         return {
             "filename": document.filename,
             "doc_id": str(document.id),
             "status": status,
             "size_bytes": document.file_size,
             "uploaded_at": document.uploaded_at.isoformat() if document.uploaded_at else None,
-            "processed_at": document.processed_at.isoformat() if document.processed_at else None
+            "processed_at": document.processed_at.isoformat() if document.processed_at else None,
+            "total_chunks": document.total_chunks,
+            "processed_chunks": document.processed_chunks,
+            "progress": round(progress, 1)
         }

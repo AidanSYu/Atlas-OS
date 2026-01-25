@@ -19,7 +19,8 @@ python-magic-bin==0.4.14; platform_system == "Windows"  # For file type detectio
 python-magic==0.4.27; platform_system != "Windows"
 
 # NER & Entity Extraction
-spacy==3.7.2
+gliner==0.1.6
+torch>=2.0.0
 
 # Utilities
 pydantic==2.5.3

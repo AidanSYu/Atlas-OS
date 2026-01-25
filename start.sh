@@ -61,13 +61,13 @@ echo ""
 echo "🐍 Setting up backend..."
 cd backend
 
-if [ ! -d "venv" ]; then
+if [ ! -d ".venv" ]; then
     echo "Creating virtual environment..."
-    $PYTHON_CMD -m venv venv
+    $PYTHON_CMD -m venv .venv
 fi
 
 # Activate virtual environment
-source venv/bin/activate || . venv/Scripts/activate
+source .venv/bin/activate || . .venv/Scripts/activate
 
 echo "Installing dependencies..."
 pip install -q -r requirements.txt
@@ -109,7 +109,7 @@ echo "   Postgres:  localhost:5432 (configure in backend/.env)"
 echo "   Qdrant:    http://localhost:6333 (or VECTOR_BACKEND=local)"
 echo ""
 echo "To start the services manually:"
-echo "   1. Backend:  cd backend && python server.py"
+echo "   1. Backend:  cd backend && python -m app.main"
 echo "   2. Frontend: cd frontend && npm run dev"
 echo ""
 
@@ -119,8 +119,8 @@ echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
     echo "Starting backend..."
     cd backend
-    source venv/bin/activate || . venv/Scripts/activate
-    python server.py &
+    source .venv/bin/activate || . .venv/Scripts/activate
+    python -m app.main &
     BACKEND_PID=$!
     
     echo "Starting frontend..."

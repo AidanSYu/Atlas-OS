@@ -19,19 +19,33 @@ class GraphService:
         document_id: Optional[str] = None,
         limit: int = 100
     ) -> List[Dict[str, Any]]:
-        """List nodes matching criteria."""
+        """List nodes matching criteria - only from active documents."""
+        from app.core.database import Document
         session = get_session()
         try:
+            # Get all active (non-deleted) document IDs
+            active_docs = session.query(Document).filter(
+                Document.status == "completed"
+            ).all()
+            active_doc_ids = [str(doc.id) for doc in active_docs]
+            
+            if not active_doc_ids:
+                # No active documents - return empty
+                return []
+            
             query = session.query(Node)
+            
+            # Filter to only nodes from active documents using .in_() operator
+            query = query.filter(
+                Node.properties['document_id'].astext.in_(active_doc_ids)
+            )
             
             if label:
                 query = query.filter(Node.label == label)
             
             if document_id:
                 try:
-                    from uuid import UUID
-                    doc_uuid = UUID(document_id)
-                    # Query nodes where properties contain document_id
+                    # Additional filter for specific document if provided
                     query = query.filter(
                         Node.properties['document_id'].astext == document_id
                     )
@@ -88,6 +102,7 @@ class GraphService:
     def get_full_graph(self, document_id: Optional[str] = None, limit: int = 500) -> Dict[str, Any]:
         """
         Get all nodes and edges together for a complete graph view.
+        ONLY returns nodes/edges from active documents - deleted documents are excluded.
         Prevents graph 'explosion' by loading everything at once.
         
         Args:
@@ -100,16 +115,33 @@ class GraphService:
                 "edges": List[Dict]
             }
         """
+        from app.core.database import Document
         session = get_session()
         try:
-            # Get all nodes (filtered by document_id if provided)
+            # Step 1: Get all active (non-deleted) document IDs
+            active_docs = session.query(Document).filter(
+                Document.status == "completed"
+            ).all()
+            active_doc_ids = [str(doc.id) for doc in active_docs]
+            
+            if not active_doc_ids:
+                # No active documents - return empty graph
+                return {
+                    "nodes": [],
+                    "edges": []
+                }
+            
+            # Step 2: Get all nodes from active documents only using optimized .in_() query
             node_query = session.query(Node)
+            
+            # Filter to only nodes from active documents using .in_() operator
+            node_query = node_query.filter(
+                Node.properties['document_id'].astext.in_(active_doc_ids)
+            )
             
             if document_id:
                 try:
-                    from uuid import UUID
-                    doc_uuid = UUID(document_id)
-                    # Query nodes where properties contain document_id
+                    # Additional filter for specific document if provided
                     node_query = node_query.filter(
                         Node.properties['document_id'].astext == document_id
                     )
@@ -123,7 +155,7 @@ class GraphService:
             # Get node IDs as set for efficient lookup
             node_ids = {n.id for n in nodes}
             
-            # Get all edges where both source and target exist in the node list
+            # Step 3: Get all edges where both source and target exist in the node list
             if node_ids:
                 edges = session.query(Edge).filter(
                     Edge.source_id.in_(node_ids),

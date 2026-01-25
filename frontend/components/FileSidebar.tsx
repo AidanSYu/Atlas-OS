@@ -31,6 +31,18 @@ export default function FileSidebar({ onFileSelect, selectedDocId }: FileSidebar
     loadFiles();
   }, [loadFiles]);
 
+  // Poll for updates when files are processing
+  useEffect(() => {
+    const hasProcessingFiles = files.some(f => f.status === 'processing' || f.status === 'pending');
+    if (!hasProcessingFiles) return;
+    
+    const interval = setInterval(() => {
+      loadFiles();
+    }, 2000); // Poll every 2 seconds
+    
+    return () => clearInterval(interval);
+  }, [files, loadFiles]);
+
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -167,6 +179,11 @@ export default function FileSidebar({ onFileSelect, selectedDocId }: FileSidebar
                       <span className="text-xs text-gray-500 capitalize">
                         {file.status}
                       </span>
+                      {(file.status === 'processing' || file.status === 'pending') && file.progress !== undefined && file.total_chunks !== undefined && file.total_chunks > 0 ? (
+                        <span className="text-xs text-blue-600 font-medium">
+                          {file.progress.toFixed(0)}%
+                        </span>
+                      ) : null}
                       <span className="text-xs text-gray-400">
                         • {formatFileSize(file.size_bytes)}
                       </span>

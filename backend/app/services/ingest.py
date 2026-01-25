@@ -15,8 +15,10 @@ import json
 import uuid
 import logging
 import time
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from pypdf import PdfReader
-from ollama import Client
+from ollama import AsyncClient
 from sqlalchemy.orm import Session
 
 from app.core.database import get_session, Node, Edge, Document, DocumentChunk
@@ -35,31 +37,43 @@ class IngestionService:
     """Orchestrates document ingestion across all knowledge layers."""
     
     def __init__(self):
-        # Initialize Ollama client with correct URL from config
-        self.ollama_client = Client(host=settings.OLLAMA_BASE_URL)
+        # Initialize Ollama async client for GPU-bound operations
+        self.ollama_client = AsyncClient(host=settings.OLLAMA_BASE_URL)
         self.qdrant_client = QdrantClient(
             host=settings.QDRANT_HOST,
             port=settings.QDRANT_PORT
         )
         self.collection_name = settings.QDRANT_COLLECTION
         
-        # Validate Ollama connection on startup
-        self._validate_ollama_connection()
-        self._ensure_collection()
+        # Thread pool for CPU-bound operations (PDF parsing, etc.)
+        self.executor = ThreadPoolExecutor(max_workers=4)
+        
+        # Initialize GLiNER model for entity extraction
+        try:
+            from gliner import GLiNER
+            self.gliner_model = GLiNER.from_pretrained("urchade/gliner_small-v2.1")
+            logger.info("✅ Loaded GLiNER model 'urchade/gliner_small-v2.1' for NER")
+        except Exception as e:
+            error_msg = f"GLiNER initialization failed: {e}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
+        
+        # Note: Async validation happens on first use
+        # Collection setup happens on first use
     
-    def _validate_ollama_connection(self):
-        """Validate Ollama connection and required models."""
+    async def _validate_ollama_connection(self):
+        """Validate Ollama connection and required models (async)."""
         try:
             # Test connection with a simple embedding
             logger.info(f"Testing Ollama connection to {settings.OLLAMA_BASE_URL}")
-            test_response = self.ollama_client.embeddings(
+            test_response = await self.ollama_client.embeddings(
                 model=settings.OLLAMA_EMBEDDING_MODEL,
                 prompt="test connection"
             )
             logger.info("✅ Ollama embedding model connection successful")
             
             # Test generation model
-            gen_response = self.ollama_client.generate(
+            gen_response = await self.ollama_client.generate(
                 model=settings.OLLAMA_MODEL,
                 prompt="test",
                 options={"temperature": 0.1}
@@ -71,15 +85,22 @@ class IngestionService:
             logger.error(f"Make sure Ollama is running and models '{settings.OLLAMA_MODEL}' and '{settings.OLLAMA_EMBEDDING_MODEL}' are installed")
             raise ConnectionError(f"Ollama connection failed: {str(e)}")
     
-    def _ensure_collection(self):
-        """Create Qdrant collection if it doesn't exist."""
+    async def _ensure_collection(self):
+        """Create Qdrant collection if it doesn't exist (async)."""
         collections = self.qdrant_client.get_collections().collections
         collection_names = [c.name for c in collections]
         
         if self.collection_name not in collection_names:
-            # Get embedding dimension from Ollama
-            test_embedding = self._embed_text("test")
-            dimension = len(test_embedding)
+            # Get embedding dimension from Ollama (async call)
+            try:
+                response = await self.ollama_client.embeddings(
+                    model=settings.OLLAMA_EMBEDDING_MODEL,
+                    prompt="test"
+                )
+                dimension = len(response['embedding'])
+            except Exception as e:
+                logger.warning(f"Failed to get embedding dimension, using default 768: {e}")
+                dimension = 768  # Default for nomic-embed-text
             
             self.qdrant_client.create_collection(
                 collection_name=self.collection_name,
@@ -89,9 +110,10 @@ class IngestionService:
                 )
             )
     
-    def _embed_text(self, text: str) -> List[float]:
-        """Generate embedding using Ollama."""
-        response = self.ollama_client.embeddings(
+    async def _embed_text(self, text: str) -> List[float]:
+        """Generate embedding using Ollama (async, GPU-bound)."""
+        # Direct async call - Ollama server handles GPU utilization
+        response = await self.ollama_client.embeddings(
             model=settings.OLLAMA_EMBEDDING_MODEL,
             prompt=text
         )
@@ -105,7 +127,7 @@ class IngestionService:
                 sha256_hash.update(byte_block)
         return sha256_hash.hexdigest()
     
-    def ingest_document(self, file_path: str, filename: str) -> Dict[str, Any]:
+    async def ingest_document(self, file_path: str, filename: str) -> Dict[str, Any]:
         """
         Main ingestion pipeline.
         
@@ -113,6 +135,8 @@ class IngestionService:
             Summary of ingestion with statistics
         """
         session = get_session()
+        doc_id = None
+        document = None
         try:
             # 1. Check for duplicate or add document
             file_hash = self._calculate_hash(file_path)
@@ -145,10 +169,15 @@ class IngestionService:
             session.commit()
             
             # 2. Extract text from PDF
-            pages = self._extract_pdf_text(file_path)
+            pages = await self._extract_pdf_text(file_path)
             
             # 3. Chunk document
             chunks = self._chunk_document(pages, doc_id, filename)
+            
+            # Set total chunks for progress tracking
+            document.total_chunks = len(chunks)
+            document.processed_chunks = 0
+            session.commit()
             
             # 4. Store chunks in PostgreSQL
             chunk_objects = []
@@ -167,94 +196,34 @@ class IngestionService:
                 session.add(chunk_obj)
             session.commit()
             
-            # 5. Extract entities and create graph nodes
-            node_ids_by_chunk = {}
-            for chunk_idx, chunk in enumerate(chunks):  # Process ALL chunks
-                chunk_uuid = uuid.uuid5(doc_id, f"chunk-{chunk['chunk_index']}")
-
-                entities = self._extract_entities_from_text(
-                    chunk["text"],
-                    doc_id,
-                    chunk["chunk_index"],
-                    chunk["page_number"]
-                )
-                
-                chunk_node_ids = []
-                entity_nodes = []  # Track nodes for relationship creation
-                
-                for entity in entities:
-                    # Create node
-                    node_id = uuid.uuid4()
-                    node = Node(
-                        id=node_id,
-                        label=entity.get("type", "Entity"),
-                        properties={
-                            "name": entity["name"],
-                            "description": entity.get("description", ""),
-                            "document_id": str(doc_id),
-                            "chunk_id": str(chunk_uuid),
-                            "page_number": chunk["page_number"],
-                            "confidence": entity.get("confidence", 0.8)
-                        }
-                    )
-                    session.add(node)
-                    chunk_node_ids.append(str(node_id))
-                    entity_nodes.append(node)  # Keep reference for relationships
-                
-                if chunk_node_ids:
-                    node_ids_by_chunk[chunk["chunk_index"]] = chunk_node_ids
-                
-                # Create relationships between entities in same chunk
-                if len(entity_nodes) > 1:
-                    for i, node1 in enumerate(entity_nodes):
-                        for node2 in entity_nodes[i+1:]:
-                            edge = Edge(
-                                source_id=node1.id,
-                                target_id=node2.id,
-                                type="CO_OCCURS",
-                                properties={
-                                    "document_id": str(doc_id),
-                                    "chunk_id": str(chunk_uuid),
-                                    "context": chunk["text"][:200]
-                                }
-                            )
-                            session.add(edge)
+            # 5. Ensure collection exists (async)
+            await self._ensure_collection()
+            
+            # 6. Extract entities and create graph nodes (PARALLELIZED)
+            node_ids_by_chunk = await self._extract_entities_parallel(
+                chunks, doc_id, session, document
+            )
             
             session.commit()
             
-            # 6. Embed and store in Qdrant (with node_id references)
-            vector_points = []
-            for chunk_idx, chunk in enumerate(chunks):
-                chunk_uuid = uuid.uuid5(doc_id, f"chunk-{chunk['chunk_index']}")
-                chunk_id = str(chunk_uuid)
-                embedding = self._embed_text(chunk["text"])
-                
-                # Include node_ids in metadata if available
-                metadata = chunk.get("metadata", {})
-                if chunk["chunk_index"] in node_ids_by_chunk:
-                    metadata["node_ids"] = node_ids_by_chunk[chunk["chunk_index"]]
-                
-                point = PointStruct(
-                    id=chunk_id,
-                    vector=embedding,
-                    payload={
-                        "chunk_id": chunk_id,
-                        "doc_id": str(doc_id),
-                        "text": chunk["text"],
-                        "metadata": metadata
-                    }
-                )
-                vector_points.append(point)
+            # 7. Embed and store in Qdrant (with node_id references) - PARALLELIZED (GPU-bound)
+            vector_points = await self._embed_chunks_parallel(chunks, doc_id, node_ids_by_chunk, document, session)
             
             if vector_points:
-                self.qdrant_client.upsert(
-                    collection_name=self.collection_name,
-                    points=vector_points
+                # Upsert is synchronous but fast, run in executor
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(
+                    self.executor,
+                    lambda: self.qdrant_client.upsert(
+                        collection_name=self.collection_name,
+                        points=vector_points
+                    )
                 )
             
-            # 7. Mark as completed
+            # 8. Mark as completed and ensure progress is 100%
             document.status = "completed"
             document.processed_at = datetime.utcnow()
+            document.processed_chunks = document.total_chunks
             session.commit()
             
             return {
@@ -269,12 +238,24 @@ class IngestionService:
             }
             
         except Exception as e:
-            if 'doc_id' in locals():
+            logger.error(f"Ingestion failed for {filename}: {str(e)}", exc_info=True)
+            # Rollback any uncommitted changes
+            try:
+                session.rollback()
+            except Exception:
+                pass
+            
+            # Update document status if it was created
+            if document is not None:
                 try:
                     document.status = "failed"
                     session.commit()
                 except Exception:
-                    pass
+                    try:
+                        session.rollback()
+                    except Exception:
+                        pass
+            
             return {
                 "status": "failed",
                 "error": str(e),
@@ -283,8 +264,17 @@ class IngestionService:
         finally:
             session.close()
     
-    def _extract_pdf_text(self, file_path: str) -> List[Dict[str, Any]]:
-        """Extract text from PDF with page numbers."""
+    async def _extract_pdf_text(self, file_path: str) -> List[Dict[str, Any]]:
+        """Extract text from PDF with page numbers (async)."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            self.executor,
+            self._extract_pdf_text_sync,
+            file_path
+        )
+    
+    def _extract_pdf_text_sync(self, file_path: str) -> List[Dict[str, Any]]:
+        """Synchronous PDF text extraction."""
         reader = PdfReader(file_path)
         pages = []
         
@@ -346,110 +336,220 @@ class IngestionService:
         
         return chunks
     
-    def _extract_entities_from_text(
+    async def _extract_entities_parallel(
+        self,
+        chunks: List[Dict[str, Any]],
+        doc_id: uuid.UUID,
+        session: Session,
+        document: Document
+    ) -> Dict[int, List[str]]:
+        """Extract entities from all chunks in parallel."""
+        node_ids_by_chunk = {}
+        
+        # Create tasks for parallel entity extraction
+        extraction_tasks = []
+        for chunk in chunks:
+            task = self._extract_entities_gliner(
+                chunk["text"],
+                labels=["Person", "Organization", "Location", "Concept", "Method", "Chemical"]
+            )
+            extraction_tasks.append((chunk, task))
+        
+        # Execute all extractions in parallel
+        results = await asyncio.gather(*[task for _, task in extraction_tasks], return_exceptions=True)
+        
+        # Process results and create nodes/edges
+        processed_count = 0
+        for (chunk, _), entities_or_error in zip(extraction_tasks, results):
+            if isinstance(entities_or_error, Exception):
+                logger.error(f"Entity extraction failed for chunk {chunk['chunk_index']}: {entities_or_error}")
+                processed_count += 1
+                continue
+            
+            entities = entities_or_error
+            chunk_uuid = uuid.uuid5(doc_id, f"chunk-{chunk['chunk_index']}")
+            
+            chunk_node_ids = []
+            entity_nodes = []
+            
+            for entity in entities:
+                # Create node
+                node_id = uuid.uuid4()
+                node = Node(
+                    id=node_id,
+                    label=entity.get("type", "Entity"),
+                    properties={
+                        "name": entity["name"],
+                        "description": entity.get("description", ""),
+                        "document_id": str(doc_id),
+                        "chunk_id": str(chunk_uuid),
+                        "page_number": chunk["page_number"],
+                        "confidence": entity.get("confidence", 0.8)
+                    }
+                )
+                session.add(node)
+                chunk_node_ids.append(str(node_id))
+                entity_nodes.append(node)
+            
+            if chunk_node_ids:
+                node_ids_by_chunk[chunk["chunk_index"]] = chunk_node_ids
+            
+            # Create relationships between entities in same chunk
+            if len(entity_nodes) > 1:
+                for i, node1 in enumerate(entity_nodes):
+                    for node2 in entity_nodes[i+1:]:
+                        edge = Edge(
+                            source_id=node1.id,
+                            target_id=node2.id,
+                            type="CO_OCCURS",
+                            properties={
+                                "document_id": str(doc_id),
+                                "chunk_id": str(chunk_uuid),
+                                "context": chunk["text"][:200]
+                            }
+                        )
+                        session.add(edge)
+            
+            # Update progress every 10 chunks
+            processed_count += 1
+            if processed_count % 10 == 0 or processed_count == len(chunks):
+                try:
+                    session.refresh(document)
+                    document.processed_chunks = min(processed_count, document.total_chunks)
+                    session.commit()
+                except Exception as e:
+                    logger.warning(f"Failed to update progress: {e}")
+                    session.rollback()
+        
+        return node_ids_by_chunk
+    
+    async def _embed_chunks_parallel(
+        self,
+        chunks: List[Dict[str, Any]],
+        doc_id: uuid.UUID,
+        node_ids_by_chunk: Dict[int, List[str]],
+        document: Document,
+        session: Session
+    ) -> List[PointStruct]:
+        """Embed all chunks in parallel."""
+        # Create embedding tasks
+        embedding_tasks = []
+        for chunk in chunks:
+            task = self._embed_text(chunk["text"])
+            embedding_tasks.append((chunk, task))
+        
+        # Execute all embeddings in parallel
+        embeddings = await asyncio.gather(*[task for _, task in embedding_tasks], return_exceptions=True)
+        
+        # Create vector points and update progress
+        vector_points = []
+        processed_count = 0
+        for (chunk, _), embedding_or_error in zip(embedding_tasks, embeddings):
+            if isinstance(embedding_or_error, Exception):
+                logger.error(f"Embedding failed for chunk {chunk['chunk_index']}: {embedding_or_error}")
+                continue
+            
+            embedding = embedding_or_error
+            chunk_uuid = uuid.uuid5(doc_id, f"chunk-{chunk['chunk_index']}")
+            chunk_id = str(chunk_uuid)
+            
+            # Include node_ids in metadata if available
+            metadata = chunk.get("metadata", {})
+            if chunk["chunk_index"] in node_ids_by_chunk:
+                metadata["node_ids"] = node_ids_by_chunk[chunk["chunk_index"]]
+            
+            point = PointStruct(
+                id=chunk_id,
+                vector=embedding,
+                payload={
+                    "chunk_id": chunk_id,
+                    "doc_id": str(doc_id),
+                    "text": chunk["text"],
+                    "metadata": metadata
+                }
+            )
+            vector_points.append(point)
+            
+            # Update progress every 10 chunks
+            processed_count += 1
+            if processed_count % 10 == 0 or processed_count == len(chunks):
+                try:
+                    session.refresh(document)
+                    document.processed_chunks = min(processed_count, document.total_chunks)
+                    session.commit()
+                except Exception as e:
+                    logger.warning(f"Failed to update progress: {e}")
+                    session.rollback()
+        
+        return vector_points
+    
+    async def _extract_entities_gliner(
         self,
         text: str,
-        doc_id: uuid.UUID,
-        chunk_index: int,
-        page_number: int
+        labels: List[str] = None
     ) -> List[Dict[str, Any]]:
-        """Use LLM to extract entities from text with retry logic."""
-        prompt = f"""Extract key entities from this scientific text. Focus on:
-- Chemicals, compounds, materials
-- Experiments, procedures, methods
-- Measurements, results, values
-- Concepts, theories
-
-For each entity, provide:
-1. name (the entity name)
-2. type (one of: chemical, experiment, measurement, concept, other)
-3. description (brief 1-sentence description)
-
-Text:
-{text[:1500]}
-
-Return ONLY a JSON array of entities, like:
-[{{"name": "benzene", "type": "chemical", "description": "aromatic hydrocarbon"}}]
-
-If no significant entities, return empty array: []
-"""
+        """
+        Extract entities using GLiNER model.
         
-        # Retry logic for LLM extraction
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                logger.info(f"Attempting LLM entity extraction (attempt {attempt + 1}/{max_retries})")
+        Args:
+            text: Text to extract entities from
+            labels: List of entity labels to extract (default: Person, Organization, Location, Concept, Method, Chemical)
+        
+        Returns:
+            List of entity dictionaries with name, type, description, and confidence
+        """
+        if labels is None:
+            labels = ["Person", "Organization", "Location", "Concept", "Method", "Chemical"]
+        
+        try:
+            # Run GLiNER in executor (CPU-bound but fast)
+            loop = asyncio.get_event_loop()
+            predictions = await loop.run_in_executor(
+                self.executor,
+                lambda: self.gliner_model.predict_entities(text, labels=labels, threshold=0.3)
+            )
+            
+            # Convert GLiNER format to our internal format
+            entities = []
+            seen_entities = set()  # Deduplicate by name+type
+            
+            for pred in predictions:
+                entity_name = pred.get("text", "").strip()
+                entity_type = pred.get("label", "Concept")
+                confidence = pred.get("score", 0.5)
                 
-                response = self.ollama_client.generate(
-                    model=settings.OLLAMA_MODEL,
-                    prompt=prompt,
-                    options={"temperature": 0.1}
-                )
-                
-                response_text = response['response'].strip()
-                
-                # Robust JSON extraction - find first [ and last ] to handle chatty LLMs
-                start_idx = response_text.find('[')
-                end_idx = response_text.rfind(']') + 1
-                
-                if start_idx >= 0 and end_idx > start_idx:
-                    json_str = response_text[start_idx:end_idx]
-                    entities = json.loads(json_str)
-                    
-                    # Validate entity structure
-                    valid_entities = []
-                    for entity in entities:
-                        if isinstance(entity, dict) and "name" in entity:
-                            valid_entities.append({
-                                "name": entity["name"],
-                                "type": entity.get("type", "other"),
-                                "description": entity.get("description", ""),
-                                "confidence": 0.8
-                            })
-                    
-                    logger.info(f"✅ LLM extraction successful: {len(valid_entities)} entities found")
-                    return valid_entities
-                
-                logger.warning(f"No valid JSON found in LLM response (attempt {attempt + 1})")
-                
-            except json.JSONDecodeError as e:
-                logger.warning(f"JSON parsing failed (attempt {attempt + 1}): {str(e)}")
-                if attempt < max_retries - 1:
-                    time.sleep(1)  # Brief delay before retry
+                # Skip empty or very short entities
+                if not entity_name or len(entity_name) < 2:
                     continue
-                    
-            except Exception as e:
-                logger.warning(f"LLM extraction failed (attempt {attempt + 1}): {str(e)}")
-                if attempt < max_retries - 1:
-                    time.sleep(2)  # Longer delay for connection issues
+                
+                # Deduplicate
+                entity_key = (entity_name.lower(), entity_type)
+                if entity_key in seen_entities:
                     continue
-        
-        # All retries failed - use fallback
-        logger.warning("❌ LLM extraction failed after all retries, using regex fallback")
-        return self._fallback_entity_extraction(text)
-    
-    def _fallback_entity_extraction(self, text: str) -> List[Dict[str, Any]]:
-        """Fallback entity extraction using regex (less accurate)."""
-        logger.warning("🔄 Using regex fallback for entity extraction")
-        
-        # Simple regex to find capitalized words/phrases
-        entities = []
-        words = re.findall(r'\b[A-Z][a-zA-Z0-9\-]+\b', text)
-        
-        # Remove common words and duplicates
-        common_words = {"The", "This", "That", "These", "Those", "Figure", "Table", "Section"}
-        unique_words = list(dict.fromkeys(words))
-        
-        for word in unique_words[:10]:  # Limit to 10 entities
-            if word not in common_words:
+                seen_entities.add(entity_key)
+                
+                # Map GLiNER labels to our internal types (lowercase for consistency)
+                type_mapping = {
+                    "Person": "person",
+                    "Organization": "organization",
+                    "Location": "location",
+                    "Concept": "concept",
+                    "Method": "method",
+                    "Chemical": "chemical"
+                }
+                mapped_type = type_mapping.get(entity_type, "concept")
+                
                 entities.append({
-                    "name": word,
-                    "type": "other",
-                    "description": "Extracted via regex fallback",
-                    "confidence": 0.5  # Lower confidence for fallback
+                    "name": entity_name,
+                    "type": mapped_type,
+                    "description": "",  # GLiNER doesn't provide descriptions
+                    "confidence": float(confidence)
                 })
-        
-        logger.info(f"📝 Regex fallback extracted {len(entities)} entities")
-        return entities
+            
+            return entities
+            
+        except Exception as e:
+            logger.error(f"GLiNER extraction failed: {str(e)}", exc_info=True)
+            # Re-raise to make errors visible
+            raise RuntimeError(f"GLiNER entity extraction failed: {str(e)}") from e
     
-

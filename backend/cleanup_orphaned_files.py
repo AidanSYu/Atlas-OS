@@ -1,6 +1,6 @@
 """Clean up orphaned database entries where files no longer exist."""
 from pathlib import Path
-from database import get_session, Document
+from app.core.database import get_session, Document
 
 session = get_session()
 

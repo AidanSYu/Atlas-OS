@@ -1,10 +1,11 @@
 """FastAPI route handlers."""
-from fastapi import APIRouter, UploadFile, File, HTTPException, Query
+from fastapi import APIRouter, UploadFile, File, HTTPException, Query, BackgroundTasks
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 import shutil
+import logging
 
 from app.services.chat import ChatService
 from app.services.ingest import IngestionService
@@ -76,8 +77,8 @@ async def root():
         "architecture": {
             "vector_store": "Qdrant",
             "knowledge_graph": "PostgreSQL (Triple Store)",
-            "llm": "Ollama (local)"
-        }
+            "llm": "Ollama (local)",
+        },
     }
 
 
@@ -86,119 +87,132 @@ async def health_check():
     """Health check of all services."""
     try:
         ensure_services()
-        # Basic connectivity checks
         return {
             "status": "healthy",
             "services": {
                 "api": "online",
                 "qdrant": "available" if chat_service is not None else "unavailable",
                 "postgres": "available" if document_service is not None else "unavailable",
-                "ollama": "configured"  # runtime check done during calls
-            }
+                "ollama": "configured",
+            },
         }
     except Exception as e:
-        return {
-            "status": "degraded",
-            "error": str(e)
-        }
+        return {"status": "degraded", "error": str(e)}
 
 
 @router.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    """
-    Query the knowledge layer using hybrid RAG.
-    
-    The AI queries the living knowledge substrate:
-    - Vector search (Qdrant) for semantic similarity
-    - Graph expansion (PostgreSQL) for relationships
-    - LLM synthesis (Ollama) for final answer
-    """
+    """Query the knowledge layer using hybrid RAG."""
     ensure_services()
-    
-    # Robust error handling: attempt to re-initialize if service is None
-    global chat_service
     if chat_service is None:
-        try:
-            chat_service = ChatService()
-        except Exception as init_error:
-            raise HTTPException(
-                status_code=503, 
-                detail=f"Chat service unavailable (vector store / Ollama not reachable): {str(init_error)}"
-            )
-    
+        raise HTTPException(
+            status_code=503,
+            detail="Chat service unavailable (vector store / Ollama not reachable)",
+        )
     try:
-        result = chat_service.chat(request.query)
+        result = await chat_service.chat(request.query)
         return ChatResponse(**result)
     except Exception as e:
         import traceback
-        import logging
-        logging.error(f"Chat error: {str(e)}")
+
         traceback.print_exc()
-        # Return JSON error detail that frontend can read
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Query error: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Query error: {str(e)}")
 
 
 @router.post("/ingest")
-async def ingest_document(file: UploadFile = File(...)):
+async def ingest_document(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...)
+):
     """
     Upload and process a PDF document through the knowledge layer.
-    
+
     Pipeline:
     1. Store document + chunks in PostgreSQL
     2. Embed chunks in Qdrant (with node_id references)
     3. Extract entities and create graph nodes/edges
+    
+    Note: Processing happens in the background. The endpoint returns immediately
+    with a "processing" status. Check document status via /files endpoint.
     """
-    if not file.filename.endswith('.pdf'):
+    if not file.filename or not file.filename.endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
-    
-    # Save file
+
+    # Save uploaded file locally
     file_path = Path(settings.UPLOAD_DIR) / file.filename
-    
+
     ensure_services()
     if ingestion_service is None:
         raise HTTPException(status_code=503, detail="Ingestion service unavailable (vector store / DB not reachable)")
     try:
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
+
+        # Start background processing task
+        background_tasks.add_task(
+            _process_document_background,
+            str(file_path),
+            file.filename,
+            ingestion_service
+        )
         
-        # Process through ingestion pipeline
-        result = ingestion_service.ingest_document(str(file_path), file.filename)
-        
-        # Check if ingestion failed - atomic cleanup: delete file if ingestion failed
-        if result.get("status") == "failed":
-            # Delete the uploaded file immediately if ingestion failed
-            if file_path.exists():
-                try:
-                    file_path.unlink()
-                except Exception as cleanup_error:
-                    # Log but don't fail on cleanup errors
-                    import logging
-                    logging.error(f"Failed to cleanup file after ingestion failure: {cleanup_error}")
-            raise HTTPException(status_code=500, detail=result.get("error", "Processing failed"))
-        
-        return result
-    
+        # Return immediately with processing status
+        return {
+            "status": "processing",
+            "message": f"Document '{file.filename}' uploaded and processing started",
+            "filename": file.filename
+        }
+
     except HTTPException:
         raise
     except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.error(f"Ingestion error for {file.filename}: {str(e)}", exc_info=True)
         # Clean up on error
         if file_path.exists():
             try:
                 file_path.unlink()
             except Exception as cleanup_error:
-                import logging
-                logging.error(f"Failed to cleanup file after error: {cleanup_error}")
+                logger.warning(f"Failed to cleanup file {file_path}: {cleanup_error}")
         raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
+
+
+async def _process_document_background(
+    file_path: str,
+    filename: str,
+    ingestion_svc: IngestionService
+):
+    """Background task to process document ingestion (async)."""
+    try:
+        # Run async ingestion - this runs on the main event loop
+        result = await ingestion_svc.ingest_document(file_path, filename)
+        
+        # Check if ingestion failed - atomic cleanup: delete file if ingestion failed
+        if result.get("status") == "failed":
+            file_path_obj = Path(file_path)
+            if file_path_obj.exists():
+                try:
+                    file_path_obj.unlink()
+                except Exception as cleanup_error:
+                    logger = logging.getLogger(__name__)
+                    logger.error(f"Failed to cleanup file after ingestion failure: {cleanup_error}")
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.error(f"Background ingestion failed for {filename}: {str(e)}", exc_info=True)
+        # Clean up on error
+        file_path_obj = Path(file_path)
+        if file_path_obj.exists():
+            try:
+                file_path_obj.unlink()
+            except Exception as cleanup_error:
+                logger.error(f"Failed to cleanup file after background error: {cleanup_error}")
 
 
 @router.get("/files", response_model=List[Dict[str, Any]])
 async def list_files(status: Optional[str] = None):
     """
     List all uploaded documents with their status.
-    
+
     Status filter: pending, processing, completed, failed
     """
     ensure_services()
@@ -219,10 +233,10 @@ async def get_file(doc_id: str):
         raise HTTPException(status_code=503, detail="Document service unavailable (DB not reachable)")
     try:
         file_response = document_service.get_document_file(doc_id)
-        
+
         if not file_response:
             raise HTTPException(status_code=404, detail="Document not found")
-        
+
         return file_response
     except HTTPException:
         raise
@@ -234,7 +248,7 @@ async def get_file(doc_id: str):
 async def delete_file(doc_id: str):
     """
     Delete a document from all knowledge layers.
-    
+
     Removes from:
     1. Vector store (Qdrant)
     2. Knowledge graph (PostgreSQL)
@@ -246,12 +260,12 @@ async def delete_file(doc_id: str):
         raise HTTPException(status_code=503, detail="Document service unavailable (DB not reachable)")
     try:
         success = document_service.delete_document(doc_id)
-        
+
         if not success:
             raise HTTPException(status_code=404, detail="Document not found")
-        
+
         return {"status": "success", "message": f"Deleted document {doc_id}"}
-    
+
     except HTTPException:
         raise
     except Exception as e:
@@ -266,7 +280,7 @@ async def list_entities(
 ):
     """
     List nodes (entities) in the knowledge graph.
-    
+
     Filters:
     - entity_type: Node label (e.g., "chemical", "experiment", "concept")
     - document_id: Nodes from specific document
@@ -289,7 +303,7 @@ async def list_entities(
 async def get_entity_relationships(entity_id: str, direction: str = "both"):
     """
     Get all relationships for a node (entity).
-    
+
     Direction: outgoing, incoming, both
     """
     ensure_services()
@@ -321,17 +335,25 @@ async def get_entity_types():
 @router.get("/graph/full")
 async def get_full_graph(document_id: Optional[str] = None):
     """
-    Get complete graph (nodes + edges) in one request.
-    Prevents graph 'explosion' by loading everything at once instead of lazy-loading edges.
-    
-    Query params:
-    - document_id: Optional filter to get graph for specific document
+    Get the complete knowledge graph.
+
+    Only returns nodes and edges from documents that are currently in the system.
+    Deleted documents are automatically excluded.
+
+    Args:
+        document_id: Optional - filter to specific document
+
+    Returns:
+        {
+            "nodes": List of all entities in graph,
+            "edges": List of all relationships in graph
+        }
     """
     ensure_services()
     if graph_service is None:
         raise HTTPException(status_code=503, detail="Graph service unavailable (DB not reachable)")
     try:
-        result = graph_service.get_full_graph(document_id=document_id)
-        return result
+        graph = graph_service.get_full_graph(document_id=document_id)
+        return graph
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error getting full graph: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting graph: {str(e)}")

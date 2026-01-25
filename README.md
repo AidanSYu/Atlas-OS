@@ -18,7 +18,7 @@ Atlas 2.0 is a complete rewrite focused on building a **continuous knowledge lay
 ```
 User Query
     ↓
-Lightweight LLM (Ollama 1B)
+Lightweight LLM (Ollama)
     ↓
 Retrieval Orchestrator
     ↓
@@ -41,67 +41,155 @@ Retrieval Orchestrator
 4. **Knowledge Graph** - Entities and relationships queryable independently
 5. **Idempotent Ingestion** - Safe to reprocess documents
 6. **Fully Open Source** - No proprietary components
+7. **Async Processing** - Non-blocking document ingestion with background tasks
+8. **Fast NER** - SpaCy-based entity extraction with LLM fallback
 
 ---
 
 ## 🚀 Quick Start
 
-docker-compose up -d
-### Prerequisites (docker-free)
-- Python 3.9+
-- PostgreSQL running locally on `localhost:5432` (or set `DB_BACKEND=sqlite`)
-- Qdrant running locally on `localhost:6333` (or set `VECTOR_BACKEND=local`)
-- Ollama
+### Prerequisites
 
-### Start in 4 Commands
+1. **Docker Desktop** (for Windows/Mac) or Docker Engine (for Linux)
+2. **Ollama** - Download from https://ollama.ai
+3. **Node.js 18+** - For frontend development
+4. **Python 3.9+** - For backend
+
+### Required Models
 
 ```bash
-# 1. Install models (once)
-ollama pull llama3.2:1b && ollama pull nomic-embed-text
+# Pull the Llama3 model (for chat and entity extraction)
+ollama pull llama3
 
-# 2. Set env for local dev (optional fallbacks)
-cd backend
-cp .env.example .env  # if missing
-set DB_BACKEND=sqlite
-set VECTOR_BACKEND=local
-
-# 3. Start backend
-pip install -r requirements.txt && python server.py
-
-# 4. Start frontend (new terminal)
-cd ../frontend && npm install && npm run dev
+# Pull the embedding model
+ollama pull nomic-embed-text
 ```
 
-**Server**: http://localhost:8000  
-**API Docs**: http://localhost:8000/docs
-**Frontend**: http://localhost:3000
+### Step 1: Start Database Services
 
-See [QUICKSTART.md](QUICKSTART.md) for detailed setup.
+**Open PowerShell** in the project folder:
+
+```powershell
+docker-compose up -d db_graph db_vector
+```
+
+Wait 10-15 seconds, then verify they're running:
+
+```powershell
+docker-compose ps
+```
+
+You should see both `atlas-postgres` and `atlas-qdrant` with status "Up".
+
+### Step 2: Start Backend Server
+
+**Open a NEW PowerShell window** and run:
+
+```powershell
+# Navigate to backend
+cd backend
+
+# Activate virtual environment (if using one)
+.\.venv\Scripts\Activate.ps1
+
+# Set environment variables
+$env:POSTGRES_HOST = "localhost"
+$env:POSTGRES_PORT = "5432"
+$env:POSTGRES_DB = "atlas_knowledge"
+$env:POSTGRES_USER = "atlas"
+$env:POSTGRES_PASSWORD = "atlas_secure_password"
+$env:QDRANT_HOST = "localhost"
+$env:QDRANT_PORT = "6333"
+$env:OLLAMA_BASE_URL = "http://localhost:11434"
+$env:OLLAMA_MODEL = "llama3"
+$env:OLLAMA_EMBEDDING_MODEL = "nomic-embed-text"
+$env:UPLOAD_DIR = "./data/uploads"
+
+# Start the server
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+**You should see:**
+```
+INFO:     Uvicorn running on http://0.0.0.0:8000
+✓ Database initialized
+```
+
+**✅ Keep this window open!** The backend is now running.
+
+**Test it:** Open http://localhost:8000/health in your browser
+
+### Step 3: Start Frontend
+
+**Open ANOTHER NEW PowerShell window** and run:
+
+```powershell
+# Navigate to frontend
+cd frontend
+
+# Start Next.js
+npm run dev
+```
+
+**You should see:**
+```
+  ▲ Next.js 14.1.0
+  - Local:        http://localhost:3000
+```
+
+**✅ Keep this window open too!** The frontend is now running.
+
+### Step 4: Open the Application
+
+**Open your browser** and go to: **http://localhost:3000**
 
 ---
 
 ## 📊 Example Queries
 
 ### Upload a Document
+
+**Via API:**
 ```bash
-curl -X POST "http://localhost:8000/ingest" -F "file=@paper.pdf"
+curl -X POST "http://localhost:8000/ingest" -F "file=@document.pdf"
 ```
 
+**Via Frontend:**
+1. Navigate to http://localhost:3000
+2. Click "Upload Document"
+3. Select PDF file
+4. Processing happens in the background - check status via `/files` endpoint
+
 ### Ask a Question
+
+**Via API:**
 ```bash
 curl -X POST "http://localhost:8000/chat" \
   -H "Content-Type: application/json" \
   -d '{"query": "What experimental methods are used?"}'
 ```
 
+**Via Frontend:**
+- Type query in the chat interface
+- View retrieved chunks, entities, and relationships
+- Explore knowledge graph visualization
+
 ### Find Relationships
+
 ```bash
-curl "http://localhost:8000/query/relationship?entity1=catalyst&entity2=reaction"
+curl "http://localhost:8000/entities/{entity_id}/relationships?direction=both"
 ```
 
-### Search Documents
+### List Documents
+
 ```bash
-curl "http://localhost:8000/query/search?concept=photocatalysis"
+curl "http://localhost:8000/files"
+```
+
+### Get Knowledge Graph
+
+```bash
+curl "http://localhost:8000/graph/full?document_id={doc_id}"
 ```
 
 ---
@@ -114,33 +202,38 @@ curl "http://localhost:8000/query/search?concept=photocatalysis"
    - Semantic search over document chunks
    - Metadata filtering
    - Top-K retrieval
+   - Embeddings via Ollama (nomic-embed-text)
 
 2. **Knowledge Graph (PostgreSQL)**
    - Entities (chemicals, experiments, concepts)
    - Relationships (co-occurrence, causation, etc.)
    - Path finding and context expansion
+   - Flexible JSONB properties
 
 3. **Document Store (PostgreSQL)**
    - Original documents
    - Chunks with provenance
-   - Deduplication via hashing
+   - Deduplication via SHA256 hashing
+   - Status tracking (pending, processing, completed, failed)
 
 ### Processing Pipeline
 
-**Ingestion**:
-1. Extract text from PDF
+**Ingestion** (Async & Parallelized):
+1. Extract text from PDF (async)
 2. Chunk with overlap
-3. Embed → Qdrant
-4. Extract entities → Graph
-5. Create relationships
+3. Store chunks in PostgreSQL
+4. **Parallel** entity extraction using SpaCy NER (with LLM fallback)
+5. **Parallel** embedding generation
+6. Store embeddings in Qdrant
+7. Create graph nodes and relationships
+8. Mark as completed
 
 **Query**:
-1. Semantic search (Qdrant)
-2. Extract entities
-3. Expand via graph
-4. Retrieve documents
-5. Synthesize with LLM
-6. Return answer + reasoning + citations
+1. Semantic search (Qdrant) - top 5 chunks
+2. Extract node_ids from chunks
+3. Expand via knowledge graph (1-hop neighborhood)
+4. Synthesize answer with LLM (Ollama)
+5. Return answer + reasoning + citations
 
 ---
 
@@ -149,26 +242,30 @@ curl "http://localhost:8000/query/search?concept=photocatalysis"
 ```
 Atlas2.0/
 ├── backend/
-│   ├── server.py              # FastAPI server
-│   ├── config.py              # Configuration
-│   ├── database.py            # PostgreSQL schema
-│   ├── vector_store.py        # Qdrant integration
-│   ├── knowledge_graph.py     # Graph operations
-│   ├── document_store.py      # Document management
-│   ├── ingest.py              # Ingestion pipeline
-│   ├── query_orchestrator.py # Query coordination
+│   ├── app/
+│   │   ├── main.py              # FastAPI entry point
+│   │   ├── api/
+│   │   │   └── routes.py        # API endpoints
+│   │   ├── core/
+│   │   │   ├── config.py        # Configuration
+│   │   │   └── database.py     # PostgreSQL schema
+│   │   └── services/
+│   │       ├── chat.py          # Chat service
+│   │       ├── ingest.py        # Ingestion pipeline (async)
+│   │       ├── document.py      # Document management
+│   │       ├── graph.py         # Graph operations
+│   │       └── retrieval.py     # Hybrid RAG retrieval
+│   ├── Dockerfile
 │   └── requirements.txt
 ├── frontend/
-│   ├── app/                   # Next.js app
-│   ├── components/            # React components
-│   └── lib/                   # Utilities
+│   ├── app/                     # Next.js pages
+│   ├── components/              # React components
+│   └── lib/                     # Utilities
 ├── data/
-│   ├── postgres/              # PostgreSQL data
-│   ├── qdrant/                # Qdrant data
-│   └── uploads/               # PDF files
-├── ARCHITECTURE.md            # Detailed design docs
-├── QUICKSTART.md              # Setup guide
-└── README.md                  # This file
+│   ├── postgres/                # PostgreSQL data
+│   ├── qdrant/                  # Qdrant data
+│   └── uploads/                 # PDF files
+└── README.md                    # This file
 ```
 
 ---
@@ -180,19 +277,114 @@ Atlas2.0/
 | Vector Store | Qdrant |
 | Knowledge Graph | PostgreSQL + SQLAlchemy |
 | Document Store | PostgreSQL |
-| LLM | Ollama (llama3.2:1b) |
+| LLM | Ollama (llama3) |
 | Embeddings | nomic-embed-text |
-| Backend API | FastAPI |
+| NER | SpaCy (en_core_web_sm) |
+| Backend API | FastAPI (async) |
 | Frontend | Next.js + React |
-| Infrastructure | Local services (PostgreSQL + Qdrant) or SQLite/local vectors fallback |
+| Infrastructure | Docker Compose (PostgreSQL + Qdrant) |
 
 ---
 
-## 📖 Documentation
+## 🛠️ Recent Improvements (Refactor 2026)
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) - Detailed architecture and design decisions
-- [QUICKSTART.md](QUICKSTART.md) - Setup and configuration guide
-- [API Documentation](http://localhost:8000/docs) - Interactive API docs (when running)
+### Performance Optimizations
+- ✅ **Async Ingestion**: Document processing is now fully asynchronous
+- ✅ **Parallel Entity Extraction**: Multiple chunks processed concurrently using `asyncio.gather`
+- ✅ **Parallel Embedding**: All chunk embeddings generated in parallel
+- ✅ **Background Tasks**: `/ingest` endpoint returns immediately, processing happens in background
+- ✅ **SpaCy NER**: Replaced slow LLM-based NER with fast SpaCy extraction (LLM as fallback)
+
+### Code Quality
+- ✅ **Dependency Injection**: Replaced global service variables with FastAPI `Depends()`
+- ✅ **Better Error Handling**: Improved session management and rollback on errors
+- ✅ **Removed Legacy Code**: Deleted redundant `backend/server.py`
+- ✅ **Session Management**: Fixed potential session leaks and race conditions
+
+### Architecture
+- ✅ **Non-blocking API**: Large file uploads no longer cause HTTP timeouts
+- ✅ **Testable Code**: Services can now be easily mocked for testing
+- ✅ **Cleaner Dependencies**: Services initialized per-request via DI
+
+---
+
+## 🐛 Troubleshooting
+
+### Backend Issues
+
+**Container won't start:**
+```bash
+docker-compose logs app
+```
+
+**Database connection errors:**
+```bash
+# Check if PostgreSQL is healthy
+docker ps
+# Restart services
+docker-compose restart
+```
+
+**Ollama connection refused:**
+- Verify Ollama is running: `ollama list`
+- Check firewall isn't blocking port 11434
+- On Linux: Change `OLLAMA_BASE_URL` to `http://localhost:11434`
+
+**SpaCy model not found:**
+```bash
+python -m spacy download en_core_web_sm
+```
+
+### Frontend Issues
+
+**Port 3000 not responding:**
+```bash
+# Clear Next.js cache
+rm -rf frontend/.next
+cd frontend
+npm run dev
+```
+
+**API calls failing:**
+- Check backend is running on port 8000
+- Verify CORS is configured in backend
+
+### Model Issues
+
+**Poor entity extraction:**
+- Ensure you're using `llama3` (8B), not `llama3.2:1b`
+- Verify with: `ollama list`
+- Check SpaCy model is installed: `python -m spacy info en_core_web_sm`
+
+**Slow responses:**
+- LLM inference is CPU/GPU intensive
+- Consider using smaller model for testing
+- Check Ollama logs: `ollama logs`
+
+---
+
+## 📖 API Documentation
+
+### Core Endpoints
+
+- `GET /` - Health check
+- `GET /health` - Comprehensive health check
+- `POST /chat` - Query with natural language
+- `POST /ingest` - Upload PDF document (background processing)
+- `GET /files` - List uploaded documents
+- `GET /files/{doc_id}` - Get document file
+- `DELETE /files/{doc_id}` - Delete document
+
+### Graph Endpoints
+
+- `GET /entities` - List entities (nodes)
+- `GET /entities/{entity_id}/relationships` - Get entity relationships
+- `GET /graph/types` - Get entity types with counts
+- `GET /graph/full` - Get complete graph (nodes + edges)
+
+### Interactive API Docs
+
+When the backend is running, visit: **http://localhost:8000/docs**
 
 ---
 
@@ -206,30 +398,72 @@ This system is successful if:
 - ✅ Relationships are queryable independently
 - ✅ Architecture scales conceptually
 - ✅ Fully open source
+- ✅ Non-blocking ingestion
+- ✅ Fast entity extraction
 
 ---
 
 ## 🛠️ Development Status
 
-**Current Phase**: MVP (Minimum Viable Product)
-
-This is a **systems MVP** focused on architecture, not a production product.
+**Current Phase**: Production-Ready MVP
 
 ### Implemented
 - ✅ Full knowledge layer (3 components)
-- ✅ Document ingestion pipeline
+- ✅ Async document ingestion pipeline
+- ✅ Parallel entity extraction (SpaCy + LLM fallback)
 - ✅ Query orchestration
-- ✅ Entity extraction
 - ✅ Relationship tracking
 - ✅ Transparent reasoning
+- ✅ Background task processing
+- ✅ FastAPI Dependency Injection
 
 ### Future Enhancements
-- Advanced NER models
-- Relationship type inference
+- Advanced relationship type inference
 - Multi-hop reasoning optimization
-- Background processing
-- Authentication
+- Authentication & authorization
+- Rate limiting
 - Monitoring & observability
+- Batch processing queue
+
+---
+
+## 🔧 Configuration
+
+### Backend Environment Variables
+
+Located in `backend/app/core/config.py` or `.env`:
+
+```python
+POSTGRES_HOST = "localhost"  # or "db_graph" for Docker
+POSTGRES_PORT = 5432
+POSTGRES_DB = "atlas_knowledge"
+POSTGRES_USER = "atlas"
+POSTGRES_PASSWORD = "atlas_secure_password"
+
+QDRANT_HOST = "localhost"  # or "db_vector" for Docker
+QDRANT_PORT = 6333
+
+OLLAMA_BASE_URL = "http://localhost:11434"
+OLLAMA_MODEL = "llama3"
+OLLAMA_EMBEDDING_MODEL = "nomic-embed-text"
+
+UPLOAD_DIR = "./data/uploads"
+CHUNK_SIZE = 1000
+CHUNK_OVERLAP = 200
+TOP_K_RETRIEVAL = 5
+```
+
+---
+
+## 📝 Example Queries
+
+After uploading research papers:
+
+- "What methodology was used in this study?"
+- "List all chemicals mentioned in the experiments"
+- "What were the main conclusions?"
+- "Show relationships between entities X and Y"
+- "Compare the methods used in different papers"
 
 ---
 
@@ -240,6 +474,7 @@ Contributions welcome! This is a systems project focused on:
 - **Correctness over convenience**
 - **Simplicity over feature creep**
 - **Clear separation of concerns**
+- **Performance and scalability**
 
 ---
 

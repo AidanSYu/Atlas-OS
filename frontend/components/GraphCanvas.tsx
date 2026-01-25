@@ -21,6 +21,7 @@ export default function GraphCanvas({ height, width }: GraphCanvasProps) {
   const [loading, setLoading] = useState(true);
   const [selectedNode, setSelectedNode] = useState<NodeData | null>(null);
   const fgRef = useRef<any>();
+  const nodePositions = useRef<Map<string, { x: number; y: number }>>(new Map());
 
   const loadGraph = useCallback(async () => {
     try {
@@ -42,6 +43,8 @@ export default function GraphCanvas({ height, width }: GraphCanvasProps) {
         label: e.type,
       }));
       
+      // Clear positions on initial load
+      nodePositions.current.clear();
       setNodes(newNodes);
       setLinks(newLinks);
     } catch (error) {
@@ -70,11 +73,13 @@ export default function GraphCanvas({ height, width }: GraphCanvasProps) {
     loadGraph();
   }, [loadGraph]);
 
-  // Transform data for force graph
-  const forceGraphData = {
-    nodes: nodes.map((n) => ({ id: n.id, name: n.name, val: 10, color: n.color, properties: n.properties, type: n.type })),
-    links: links.map((l) => ({ source: l.source, target: l.target, label: l.label })),
-  };
+  // Transform data for force graph - memoize to prevent unnecessary recalculations
+  const forceGraphData = useMemo(() => {
+    return {
+      nodes: nodes.map((n) => ({ id: n.id, name: n.name, val: 10, color: n.color, properties: n.properties, type: n.type })),
+      links: links.map((l) => ({ source: l.source, target: l.target, label: l.label })),
+    };
+  }, [nodes, links]);
 
   function getNodeColor(label: string): string {
     const colors: Record<string, string> = {
@@ -147,7 +152,24 @@ export default function GraphCanvas({ height, width }: GraphCanvasProps) {
           });
           
           // Only add new links, don't reset the graph
-          return newLinksToAdd.length > 0 ? [...prevLinks, ...newLinksToAdd] : prevLinks;
+          if (newLinksToAdd.length > 0) {
+            // When adding new links, unlock positions temporarily to allow simulation to adjust
+            if (fgRef.current) {
+              fgRef.current.getGraphData().nodes.forEach((node: any) => {
+                // Only unlock if it's not manually positioned
+                if (node.fx !== undefined && node.fy !== undefined) {
+                  const pos = nodePositions.current.get(node.id);
+                  if (pos) {
+                    // Keep locked but allow slight adjustment
+                    node.fx = pos.x;
+                    node.fy = pos.y;
+                  }
+                }
+              });
+            }
+            return [...prevLinks, ...newLinksToAdd];
+          }
+          return prevLinks;
         });
       } catch (e) {
         console.error('Failed to expand relationships', e);
@@ -191,6 +213,48 @@ export default function GraphCanvas({ height, width }: GraphCanvasProps) {
         linkColor={() => '#64748b'}
         linkWidth={2}
         onNodeClick={handleNodeClick}
+        onNodeDrag={(node: any) => {
+          // Lock position during drag
+          node.fx = node.x;
+          node.fy = node.y;
+        }}
+        onNodeDragEnd={(node: any) => {
+          // Keep position locked after drag
+          node.fx = node.x;
+          node.fy = node.y;
+        }}
+        onNodeRightClick={(node: any) => {
+          // Unlock position on right click to allow simulation to reposition
+          node.fx = undefined;
+          node.fy = undefined;
+        }}
+        onEngineTick={() => {
+          // Store positions of all nodes on each tick to preserve them when new nodes are added
+          if (fgRef.current) {
+            fgRef.current.getGraphData().nodes.forEach((node: any) => {
+              if (node.x !== undefined && node.y !== undefined && !node.fx && !node.fy) {
+                // Only store positions for nodes that aren't locked
+                nodePositions.current.set(node.id, { x: node.x, y: node.y });
+              }
+            });
+          }
+        }}
+        onEngineStop={() => {
+          // When simulation stops, lock all node positions to prevent reset
+          if (fgRef.current) {
+            fgRef.current.getGraphData().nodes.forEach((node: any) => {
+              if (node.x !== undefined && node.y !== undefined && !node.fx && !node.fy) {
+                // Lock positions to prevent reset when new nodes are added
+                node.fx = node.x;
+                node.fy = node.y;
+                nodePositions.current.set(node.id, { x: node.x, y: node.y });
+              }
+            });
+          }
+        }}
+        cooldownTicks={100}
+        enablePanInteraction={true}
+        enableZoomInteraction={true}
         nodeCanvasObject={(node: any, ctx, globalScale) => {
           const label = node.name;
           const fontSize = 12 / globalScale;

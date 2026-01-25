@@ -64,13 +64,13 @@ Write-Host ""
 Write-Host "🐍 Setting up backend..." -ForegroundColor Yellow
 Set-Location backend
 
-if (-not (Test-Path "venv")) {
+if (-not (Test-Path ".venv")) {
     Write-Host "Creating virtual environment..." -ForegroundColor Cyan
-    python -m venv venv
+    python -m venv .venv
 }
 
 Write-Host "Activating virtual environment..." -ForegroundColor Cyan
-.\venv\Scripts\Activate.ps1
+.\.venv\Scripts\Activate.ps1
 
 Write-Host "Installing dependencies..." -ForegroundColor Cyan
 pip install -q -r requirements.txt
@@ -112,7 +112,7 @@ Write-Host "   Postgres:  localhost:5432 (configure in backend/.env)"
 Write-Host "   Qdrant:    http://localhost:6333 (or VECTOR_BACKEND=local)"
 Write-Host ""
 Write-Host "To start the services manually:" -ForegroundColor Yellow
-Write-Host "   1. Backend:  cd backend; python server.py"
+Write-Host "   1. Backend:  cd backend; python -m app.main"
 Write-Host "   2. Frontend: cd frontend; npm run dev"
 Write-Host ""
 
@@ -120,7 +120,7 @@ $response = Read-Host "Start services now? (y/n)"
 if ($response -eq "y" -or $response -eq "Y") {
     Write-Host ""
     Write-Host "Starting backend..." -ForegroundColor Cyan
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd backend; .\venv\Scripts\Activate.ps1; python server.py"
+    Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd backend; .\.venv\Scripts\Activate.ps1; python -m app.main"
     
     Start-Sleep -Seconds 2
     
