@@ -42,7 +42,7 @@ Retrieval Orchestrator
 5. **Idempotent Ingestion** - Safe to reprocess documents
 6. **Fully Open Source** - No proprietary components
 7. **Async Processing** - Non-blocking document ingestion with background tasks
-8. **Fast NER** - SpaCy-based entity extraction with LLM fallback
+8. **Fast NER** - GLiNER-based entity extraction (~50x faster than LLM, no hallucinations)
 
 ---
 
@@ -58,12 +58,14 @@ Retrieval Orchestrator
 ### Required Models
 
 ```bash
-# Pull the Llama3 model (for chat and entity extraction)
+# Pull the Llama3 model (for chat and query synthesis)
 ollama pull llama3
 
 # Pull the embedding model
 ollama pull nomic-embed-text
 ```
+
+**Note:** Entity extraction uses GLiNER (automatically downloaded on first use), not Ollama.
 
 ### Step 1: Start Database Services
 
@@ -222,10 +224,10 @@ curl "http://localhost:8000/graph/full?document_id={doc_id}"
 1. Extract text from PDF (async)
 2. Chunk with overlap
 3. Store chunks in PostgreSQL
-4. **Parallel** entity extraction using SpaCy NER (with LLM fallback)
+4. **Parallel** entity extraction using GLiNER (fast BERT-based NER)
 5. **Parallel** embedding generation
 6. Store embeddings in Qdrant
-7. Create graph nodes and relationships
+7. Create graph nodes and relationships (only for nearby entities)
 8. Mark as completed
 
 **Query**:
@@ -279,7 +281,7 @@ Atlas2.0/
 | Document Store | PostgreSQL |
 | LLM | Ollama (llama3) |
 | Embeddings | nomic-embed-text |
-| NER | SpaCy (en_core_web_sm) |
+| NER | GLiNER (urchade/gliner_small-v2.1) |
 | Backend API | FastAPI (async) |
 | Frontend | Next.js + React |
 | Infrastructure | Docker Compose (PostgreSQL + Qdrant) |
@@ -293,7 +295,9 @@ Atlas2.0/
 - ✅ **Parallel Entity Extraction**: Multiple chunks processed concurrently using `asyncio.gather`
 - ✅ **Parallel Embedding**: All chunk embeddings generated in parallel
 - ✅ **Background Tasks**: `/ingest` endpoint returns immediately, processing happens in background
-- ✅ **SpaCy NER**: Replaced slow LLM-based NER with fast SpaCy extraction (LLM as fallback)
+- ✅ **GLiNER NER**: Replaced slow LLM-based NER with fast GLiNER extraction (~50x faster, no hallucinations)
+- ✅ **Smart Graph Construction**: Only creates edges for entities within 100 characters (prevents "hairball" graphs)
+- ✅ **Progress Tracking**: Real-time progress updates during ingestion (total_chunks, processed_chunks)
 
 ### Code Quality
 - ✅ **Dependency Injection**: Replaced global service variables with FastAPI `Depends()`
@@ -330,9 +334,11 @@ docker-compose restart
 - Check firewall isn't blocking port 11434
 - On Linux: Change `OLLAMA_BASE_URL` to `http://localhost:11434`
 
-**SpaCy model not found:**
+**GLiNER model not found:**
+GLiNER automatically downloads the model (`urchade/gliner_small-v2.1`) on first use. If you encounter issues:
 ```bash
-python -m spacy download en_core_web_sm
+# Ensure torch is installed
+pip install torch gliner
 ```
 
 ### Frontend Issues
@@ -352,9 +358,10 @@ npm run dev
 ### Model Issues
 
 **Poor entity extraction:**
-- Ensure you're using `llama3` (8B), not `llama3.2:1b`
-- Verify with: `ollama list`
-- Check SpaCy model is installed: `python -m spacy info en_core_web_sm`
+- GLiNER automatically downloads on first use - check logs for "✅ Loaded GLiNER model"
+- Verify GLiNER is installed: `pip show gliner`
+- Check that torch is installed: `pip show torch`
+- GLiNER uses labels: Person, Organization, Location, Concept, Method, Chemical
 
 **Slow responses:**
 - LLM inference is CPU/GPU intensive
@@ -410,20 +417,50 @@ This system is successful if:
 ### Implemented
 - ✅ Full knowledge layer (3 components)
 - ✅ Async document ingestion pipeline
-- ✅ Parallel entity extraction (SpaCy + LLM fallback)
+- ✅ Parallel entity extraction (GLiNER - fast BERT-based NER)
 - ✅ Query orchestration
-- ✅ Relationship tracking
+- ✅ Relationship tracking (smart proximity-based edge creation)
 - ✅ Transparent reasoning
 - ✅ Background task processing
 - ✅ FastAPI Dependency Injection
+- ✅ Real-time progress tracking for document ingestion
 
-### Future Enhancements
-- Advanced relationship type inference
-- Multi-hop reasoning optimization
-- Authentication & authorization
-- Rate limiting
-- Monitoring & observability
-- Batch processing queue
+### Future Enhancements (Local-First Roadmap)
+
+**Core Functionality:**
+- 🔍 **Advanced Search**: Full-text search across documents with boolean operators, date ranges, and field-specific queries
+- 📊 **Multi-Document Comparison**: Side-by-side analysis of concepts, methods, and findings across multiple papers
+- 🔗 **Relationship Type Inference**: Automatically classify edge types (causes, uses, references, contradicts) using local LLM
+- 📑 **Citation Manager**: Export citations in BibTeX, APA, MLA formats with clickable links to source pages
+- 🗺️ **Interactive Graph Explorer**: Enhanced visualization with filtering, clustering, and path-finding between entities
+
+**Performance & Scalability:**
+- ⚡ **Embedded Database Mode**: SQLite option for single-user deployments (no PostgreSQL required)
+- 🚀 **Incremental Indexing**: Only re-process changed pages when documents are updated
+- 💾 **Local Model Caching**: Pre-download and cache GLiNER/Ollama models for offline-first operation
+- 🔄 **Smart Deduplication**: Detect and merge duplicate entities across documents automatically
+- 📦 **Batch Import**: Process entire directories of PDFs with progress tracking and error recovery
+
+**Desktop App Packaging:**
+- 🖥️ **Electron/Tauri Wrapper**: Package as native desktop app (Windows/Mac/Linux)
+- 📱 **Single Executable**: Self-contained binary with embedded databases and models
+- 🔒 **Local Data Encryption**: Optional encryption at rest for sensitive documents
+- ⚙️ **Settings UI**: Graphical configuration panel instead of editing .env files
+- 🔔 **System Notifications**: Desktop notifications for completed ingestion and errors
+
+**User Experience:**
+- 🎨 **Dark Mode**: Full dark theme support for extended reading sessions
+- 📝 **Annotation System**: Highlight and annotate PDFs with notes linked to knowledge graph
+- 🔖 **Bookmarks & Collections**: Organize documents into custom collections with tags
+- 📈 **Analytics Dashboard**: Visualize document statistics, entity counts, and query patterns
+- 🔍 **Query History**: Save and replay previous queries with context
+
+**Advanced Features:**
+- 🤖 **Multi-Hop Reasoning**: Follow relationship chains (A→B→C) to answer complex questions
+- 📚 **Document Summarization**: Auto-generate summaries using local LLM with key entities highlighted
+- 🔄 **Version Control**: Track document versions and changes over time
+- 🌐 **Multi-Language Support**: Extend GLiNER to extract entities in multiple languages
+- 🧪 **Query Templates**: Pre-built query templates for common research questions
 
 ---
 
