@@ -461,6 +461,7 @@ This system is successful if:
 - 🔄 **Version Control**: Track document versions and changes over time
 - 🌐 **Multi-Language Support**: Extend GLiNER to extract entities in multiple languages
 - 🧪 **Query Templates**: Pre-built query templates for common research questions
+- OCR Implemntation for non textbased documents and images like lab notebooks. 
 
 ---
 
