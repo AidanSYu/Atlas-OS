@@ -7,7 +7,7 @@ Implements a flexible Triple Store schema:
 """
 from sqlalchemy import (
     create_engine, Column, String, Integer, DateTime, Text, ForeignKey, 
-    JSON, Index, UUID as SQLUUID
+    JSON, Index, UUID as SQLUUID, text, inspect
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.ext.declarative import declarative_base
@@ -38,11 +38,15 @@ class Node(Base):
     label = Column(String, nullable=False, index=True)  # e.g., "Molecule", "Author", "Concept"
     properties = Column(JSONB, nullable=False, default=dict)  # Flexible JSON storage
     
+    # PERFORMANCE FIX: Add explicit document_id FK instead of storing in JSONB
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id"), nullable=True, index=True)
+    
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
+    document = relationship("Document", back_populates="nodes")
     outgoing_edges = relationship(
         "Edge",
         foreign_keys="Edge.source_id",
@@ -58,6 +62,7 @@ class Node(Base):
     
     __table_args__ = (
         Index("idx_nodes_label", "label"),
+        Index("idx_nodes_document_id", "document_id"),  # Index for FK queries
         Index("idx_nodes_properties", "properties", postgresql_using="gin"),  # GIN index for JSONB
     )
 
@@ -75,10 +80,14 @@ class Edge(Base):
     type = Column(String, nullable=False, index=True)  # e.g., "MENTIONS", "USES", "PRODUCES"
     properties = Column(JSONB, nullable=False, default=dict)  # Flexible JSON storage
     
+    # PERFORMANCE FIX: Add explicit document_id FK instead of storing in JSONB
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id"), nullable=True, index=True)
+    
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     
     # Relationships
+    document = relationship("Document", back_populates="edges")
     source_node = relationship("Node", foreign_keys=[source_id], back_populates="outgoing_edges")
     target_node = relationship("Node", foreign_keys=[target_id], back_populates="incoming_edges")
     
@@ -86,6 +95,7 @@ class Edge(Base):
         Index("idx_edges_source", "source_id"),
         Index("idx_edges_target", "target_id"),
         Index("idx_edges_type", "type"),
+        Index("idx_edges_document_id", "document_id"),  # Index for FK queries
         Index("idx_edges_properties", "properties", postgresql_using="gin"),  # GIN index for JSONB
         Index("idx_edges_source_target", "source_id", "target_id"),
     )
@@ -119,6 +129,10 @@ class Document(Base):
     
     # Additional metadata (avoid reserved name 'metadata')
     doc_metadata = Column(JSONB, default=dict)
+    
+    # PERFORMANCE FIX: Add back_populates relationships for efficient querying
+    nodes = relationship("Node", back_populates="document", cascade="all, delete-orphan")
+    edges = relationship("Edge", back_populates="document", cascade="all, delete-orphan")
 
 
 class DocumentChunk(Base):
@@ -174,6 +188,7 @@ def init_db():
     """Initialize database and create all tables."""
     engine = get_engine()
     Base.metadata.create_all(engine)
+    _ensure_schema(engine)
     return engine
 
 
@@ -182,3 +197,36 @@ def reset_db():
     engine = get_engine()
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
+
+
+def _ensure_schema(engine) -> None:
+    """Ensure new columns/indexes exist for live databases (lightweight migration)."""
+    inspector = inspect(engine)
+    with engine.begin() as conn:
+        # Ensure nodes.document_id exists
+        if "nodes" in inspector.get_table_names():
+            node_columns = {col["name"] for col in inspector.get_columns("nodes")}
+            if "document_id" not in node_columns:
+                conn.execute(text("ALTER TABLE nodes ADD COLUMN document_id UUID"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_nodes_document_id ON nodes (document_id)"))
+            # Add FK constraint if missing (nullable, safe for existing data)
+            node_fks = {fk.get("name") for fk in inspector.get_foreign_keys("nodes")}
+            if "fk_nodes_document_id" not in node_fks:
+                conn.execute(text(
+                    "ALTER TABLE nodes ADD CONSTRAINT fk_nodes_document_id "
+                    "FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE"
+                ))
+
+        # Ensure edges.document_id exists
+        if "edges" in inspector.get_table_names():
+            edge_columns = {col["name"] for col in inspector.get_columns("edges")}
+            if "document_id" not in edge_columns:
+                conn.execute(text("ALTER TABLE edges ADD COLUMN document_id UUID"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_edges_document_id ON edges (document_id)"))
+            # Add FK constraint if missing (nullable, safe for existing data)
+            edge_fks = {fk.get("name") for fk in inspector.get_foreign_keys("edges")}
+            if "fk_edges_document_id" not in edge_fks:
+                conn.execute(text(
+                    "ALTER TABLE edges ADD CONSTRAINT fk_edges_document_id "
+                    "FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE"
+                ))

@@ -8,11 +8,12 @@ Implements hybrid search combining:
 4. Document filtering (only active documents)
 """
 from typing import List, Dict, Any, Optional, Set
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_, and_
 import re
 import json
 import logging
+import asyncio
 
 from app.core.database import get_session, Node, Edge, Document
 from app.core.config import settings
@@ -136,24 +137,18 @@ Example: {{"entities": ["China"], "dates": ["1920", "1930"], "date_ranges": [{{"
             # Step 1: Vector Search - Get top chunks from Qdrant (filtered by active docs)
             query_embedding = await self._embed_text(user_question)
             
-            # Filter to only active documents
-            doc_filter = Filter(
-                must=[
-                    FieldCondition(
-                        key="doc_id",
-                        match=MatchValue(value=list(active_doc_ids)[0]) if len(active_doc_ids) == 1 
-                        else None  # Qdrant doesn't support OR easily, so we'll filter in Python
-                    )
-                ]
-            ) if len(active_doc_ids) == 1 else None
+            # PERFORMANCE FIX C: Use run_in_executor to prevent blocking the event loop
+            # Qdrant client.search is synchronous (blocking), so we run it in a thread pool
+            loop = asyncio.get_running_loop()
             
-            # Get more results initially, then filter
-            vector_results = self.qdrant_client.search(
-                collection_name=self.collection_name,
-                query_vector=query_embedding,
-                limit=20,  # Get more, filter down
-                query_filter=doc_filter
-            )
+            def _qdrant_search():
+                return self.qdrant_client.search(
+                    collection_name=self.collection_name,
+                    query_vector=query_embedding,
+                    limit=20,  # Get more, filter down
+                )
+            
+            vector_results = await loop.run_in_executor(None, _qdrant_search)
             
             # Filter to only active documents
             vector_results = [r for r in vector_results if r.payload.get("doc_id") in active_doc_ids]
@@ -174,12 +169,15 @@ Example: {{"entities": ["China"], "dates": ["1920", "1930"], "date_ranges": [{{"
                 # Find nodes matching query entities (case-insensitive)
                 entity_nodes = []
                 for entity_name in query_info["entities"]:
-                    # Query for nodes with matching name (case-insensitive)
-                    # Use .in_() operator for efficient filtering by active document IDs
-                    nodes = session.query(Node).filter(
+                    # PERFORMANCE FIX B: Use JOIN and FK instead of JSONB filtering
+                    # Query nodes from active documents using FK relationship
+                    nodes = session.query(Node).join(
+                        Document,
+                        Node.document_id == Document.id
+                    ).filter(
                         and_(
                             Node.properties['name'].astext.ilike(f"%{entity_name}%"),
-                            Node.properties['document_id'].astext.in_(list(active_doc_ids))
+                            Document.status == "completed"
                         )
                     ).limit(20).all()
                     entity_nodes.extend(nodes)
@@ -190,11 +188,15 @@ Example: {{"entities": ["China"], "dates": ["1920", "1930"], "date_ranges": [{{"
                     chunk_id = node.properties.get("chunk_id")
                     if chunk_id and chunk_id not in seen_chunk_ids:
                         seen_chunk_ids.add(chunk_id)
-                        # Search Qdrant for this chunk
+                        # Search Qdrant for this chunk - use run_in_executor to prevent blocking
                         try:
-                            chunk_result = self.qdrant_client.retrieve(
-                                collection_name=self.collection_name,
-                                ids=[chunk_id]
+                            loop = asyncio.get_running_loop()
+                            chunk_result = await loop.run_in_executor(
+                                None,
+                                lambda cid=chunk_id: self.qdrant_client.retrieve(
+                                    collection_name=self.collection_name,
+                                    ids=[cid]
+                                )
                             )
                             if chunk_result and chunk_result[0].payload.get("doc_id") in active_doc_ids:
                                 payload = chunk_result[0].payload
@@ -225,10 +227,15 @@ Example: {{"entities": ["China"], "dates": ["1920", "1930"], "date_ranges": [{{"
                                 )
                             ]
                         )
-                        scroll_result = self.qdrant_client.scroll(
-                            collection_name=self.collection_name,
-                            scroll_filter=doc_filter,
-                            limit=200  # Get more chunks per doc
+                        # PERFORMANCE FIX C: Use run_in_executor for scroll operation
+                        loop = asyncio.get_running_loop()
+                        scroll_result = await loop.run_in_executor(
+                            None,
+                            lambda: self.qdrant_client.scroll(
+                                collection_name=self.collection_name,
+                                scroll_filter=doc_filter,
+                                limit=200  # Get more chunks per doc
+                            )
                         )
                         points, _ = scroll_result
                         
@@ -318,20 +325,9 @@ Example: {{"entities": ["China"], "dates": ["1920", "1930"], "date_ranges": [{{"
                         node_ids = [nid.strip() for nid in node_ids.split(",") if nid.strip()]
                     if isinstance(node_ids, list):
                         node_ids_from_chunks.update(node_ids)
-                
-                # Extract node_ids from metadata if present
-                metadata = payload.get("metadata", {})
-                if "node_ids" in metadata:
-                    # node_ids might be a list or comma-separated string
-                    node_ids = metadata.get("node_ids", [])
-                    if isinstance(node_ids, str):
-                        # Handle comma-separated string
-                        node_ids = [nid.strip() for nid in node_ids.split(",") if nid.strip()]
-                    if isinstance(node_ids, list):
-                        node_ids_from_chunks.update(node_ids)
-                
+
                 # Also check if chunk_id references a node
-                chunk_id = payload.get("chunk_id")
+                chunk_id = metadata.get("chunk_id")
                 if chunk_id:
                     # Try to find nodes that reference this chunk using JSONB query
                     # SQLAlchemy 2.0 JSONB query syntax - use astext for text extraction
@@ -365,8 +361,11 @@ Example: {{"entities": ["China"], "dates": ["1920", "1930"], "date_ranges": [{{"
                         continue
                 
                 if node_uuids:
-                    # Get the nodes themselves
-                    nodes = session.query(Node).filter(
+                    # Get the nodes themselves with eager-loaded relationships
+                    nodes = session.query(Node).options(
+                        joinedload(Node.outgoing_edges).joinedload(Edge.target_node),
+                        joinedload(Node.incoming_edges).joinedload(Edge.source_node)
+                    ).filter(
                         Node.id.in_(node_uuids)
                     ).all()
                     
@@ -377,8 +376,11 @@ Example: {{"entities": ["China"], "dates": ["1920", "1930"], "date_ranges": [{{"
                             "properties": node.properties
                         })
                     
-                    # Get 1-hop neighborhood (edges connected to these nodes)
-                    edges = session.query(Edge).filter(
+                    # Get 1-hop neighborhood (edges connected to these nodes) with eager loading
+                    edges = session.query(Edge).options(
+                        joinedload(Edge.source_node),
+                        joinedload(Edge.target_node)
+                    ).filter(
                         or_(
                             Edge.source_id.in_(node_uuids),
                             Edge.target_id.in_(node_uuids)

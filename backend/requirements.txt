@@ -19,8 +19,12 @@ python-magic-bin==0.4.14; platform_system == "Windows"  # For file type detectio
 python-magic==0.4.27; platform_system != "Windows"
 
 # NER & Entity Extraction
-gliner==0.1.6
-torch>=2.0.0
+# Updated for GLiNER v2.1 support
+# Windows long path support may be required: https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation
+gliner>=0.2.7
+transformers>=4.38.2,<5.0.0
+torch==2.5.1
+torchvision==0.20.1
 
 # Utilities
 pydantic==2.5.3

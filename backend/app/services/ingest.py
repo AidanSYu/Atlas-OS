@@ -17,6 +17,11 @@ import logging
 import time
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+try:
+    import pdfplumber
+    PDFPLUMBER_AVAILABLE = True
+except ImportError:
+    PDFPLUMBER_AVAILABLE = False
 from pypdf import PdfReader
 from ollama import AsyncClient
 from sqlalchemy.orm import Session
@@ -48,15 +53,14 @@ class IngestionService:
         # Thread pool for CPU-bound operations (PDF parsing, etc.)
         self.executor = ThreadPoolExecutor(max_workers=4)
         
-        # Initialize GLiNER model for entity extraction
+        # Initialize GLiNER model for entity extraction (required)
         try:
             from gliner import GLiNER
             self.gliner_model = GLiNER.from_pretrained("urchade/gliner_small-v2.1")
             logger.info("✅ Loaded GLiNER model 'urchade/gliner_small-v2.1' for NER")
         except Exception as e:
-            error_msg = f"GLiNER initialization failed: {e}"
-            logger.error(error_msg)
-            raise RuntimeError(error_msg) from e
+            logger.error(f"❌ GLiNER entity extraction unavailable: {e}")
+            raise RuntimeError("GLiNER model is required for ingestion. Fix the model install/config and retry.") from e
         
         # Note: Async validation happens on first use
         # Collection setup happens on first use
@@ -137,7 +141,10 @@ class IngestionService:
         session = get_session()
         doc_id = None
         document = None
+        start_time = time.time()
         try:
+            logger.info(f"🔄 Starting ingestion pipeline for: {filename}")
+            
             # 1. Check for duplicate or add document
             file_hash = self._calculate_hash(file_path)
             file_size = Path(file_path).stat().st_size
@@ -147,6 +154,7 @@ class IngestionService:
             ).first()
             
             if existing_doc:
+                logger.info(f"⏭️ Skipping duplicate: {filename} (already ingested)")
                 return {
                     "status": "duplicate",
                     "doc_id": str(existing_doc.id),
@@ -167,12 +175,37 @@ class IngestionService:
             )
             session.add(document)
             session.commit()
+            logger.info(f"📄 Document created: {filename} (ID: {doc_id})")
             
             # 2. Extract text from PDF
+            logger.info(f"📖 Extracting text from PDF...")
             pages = await self._extract_pdf_text(file_path)
+            logger.info(f"✅ Extracted {len(pages)} pages from PDF")
+            
+            if len(pages) == 0:
+                logger.warning(f"⚠️  No text extracted from PDF! The PDF may be scanned images or have extraction restrictions.")
+                # Mark as completed but with warning
+                document.status = "completed"
+                document.processed_at = datetime.utcnow()
+                document.total_chunks = 0
+                document.processed_chunks = 0
+                session.commit()
+                return {
+                    "status": "completed",
+                    "doc_id": str(doc_id),
+                    "filename": filename,
+                    "stats": {
+                        "pages": 0,
+                        "chunks": 0,
+                        "nodes": 0,
+                        "warning": "No text extracted - PDF may be scanned images"
+                    }
+                }
             
             # 3. Chunk document
+            logger.info(f"✂️ Chunking document into segments...")
             chunks = self._chunk_document(pages, doc_id, filename)
+            logger.info(f"✅ Created {len(chunks)} chunks")
             
             # Set total chunks for progress tracking
             document.total_chunks = len(chunks)
@@ -180,6 +213,7 @@ class IngestionService:
             session.commit()
             
             # 4. Store chunks in PostgreSQL
+            logger.info(f"💾 Storing chunks in PostgreSQL...")
             chunk_objects = []
             for chunk_data in chunks:
                 chunk_obj = DocumentChunk(
@@ -195,22 +229,31 @@ class IngestionService:
                 chunk_objects.append(chunk_obj)
                 session.add(chunk_obj)
             session.commit()
+            logger.info(f"✅ Stored {len(chunks)} chunks in PostgreSQL")
             
             # 5. Ensure collection exists (async)
+            logger.info(f"🗄️ Ensuring Qdrant collection exists...")
             await self._ensure_collection()
+            logger.info(f"✅ Qdrant collection ready")
             
             # 6. Extract entities and create graph nodes (PARALLELIZED)
+            logger.info(f"🔗 Extracting entities and creating knowledge graph nodes...")
             node_ids_by_chunk = await self._extract_entities_parallel(
                 chunks, doc_id, session, document
             )
+            total_nodes = sum(len(ids) for ids in node_ids_by_chunk.values())
+            logger.info(f"✅ Created {total_nodes} knowledge graph nodes from {len(node_ids_by_chunk)} chunks with entities")
             
             session.commit()
             
             # 7. Embed and store in Qdrant (with node_id references) - PARALLELIZED (GPU-bound)
+            logger.info(f"🧠 Embedding chunks with Ollama...")
             vector_points = await self._embed_chunks_parallel(chunks, doc_id, node_ids_by_chunk, document, session)
+            logger.info(f"✅ Embedded {len(vector_points)} chunks")
             
             if vector_points:
                 # Upsert is synchronous but fast, run in executor
+                logger.info(f"📤 Uploading embeddings to Qdrant vector store...")
                 loop = asyncio.get_event_loop()
                 await loop.run_in_executor(
                     self.executor,
@@ -219,6 +262,7 @@ class IngestionService:
                         points=vector_points
                     )
                 )
+                logger.info(f"✅ Uploaded {len(vector_points)} vectors to Qdrant")
             
             # 8. Mark as completed and ensure progress is 100%
             document.status = "completed"
@@ -226,7 +270,8 @@ class IngestionService:
             document.processed_chunks = document.total_chunks
             session.commit()
             
-            return {
+            elapsed = time.time() - start_time
+            result = {
                 "status": "success",
                 "doc_id": str(doc_id),
                 "filename": filename,
@@ -237,8 +282,13 @@ class IngestionService:
                 }
             }
             
+            logger.info(f"✅ Ingestion complete in {elapsed:.2f}s: {filename}")
+            logger.info(f"   Pages: {len(pages)}, Chunks: {len(chunks)}, Graph Nodes: {result['stats']['nodes']}")
+            
+            return result
+            
         except Exception as e:
-            logger.error(f"Ingestion failed for {filename}: {str(e)}", exc_info=True)
+            logger.error(f"❌ Ingestion failed for {filename}: {str(e)}", exc_info=True)
             # Rollback any uncommitted changes
             try:
                 session.rollback()
@@ -274,18 +324,41 @@ class IngestionService:
         )
     
     def _extract_pdf_text_sync(self, file_path: str) -> List[Dict[str, Any]]:
-        """Synchronous PDF text extraction."""
-        reader = PdfReader(file_path)
+        """Synchronous PDF text extraction using pdfplumber (preferred) or PyPDF."""
         pages = []
         
-        for page_num, page in enumerate(reader.pages, start=1):
-            text = page.extract_text()
-            if text.strip():
-                pages.append({
-                    "page_number": page_num,
-                    "text": text,
-                    "char_count": len(text)
-                })
+        # Try pdfplumber first (better extraction)
+        if PDFPLUMBER_AVAILABLE:
+            try:
+                with pdfplumber.open(file_path) as pdf:
+                    for page_num, page in enumerate(pdf.pages, start=1):
+                        text = page.extract_text()
+                        if text and text.strip():
+                            pages.append({
+                                "page_number": page_num,
+                                "text": text,
+                                "char_count": len(text)
+                            })
+                if pages:
+                    logger.info(f"✅ Extracted {len(pages)} pages using pdfplumber")
+                    return pages
+            except Exception as e:
+                logger.warning(f"pdfplumber extraction failed: {e}, trying PyPDF...")
+        
+        # Fallback to PyPDF
+        try:
+            reader = PdfReader(file_path)
+            for page_num, page in enumerate(reader.pages, start=1):
+                text = page.extract_text()
+                if text and text.strip():
+                    pages.append({
+                        "page_number": page_num,
+                        "text": text,
+                        "char_count": len(text)
+                    })
+            logger.info(f"✅ Extracted {len(pages)} pages using PyPDF")
+        except Exception as e:
+            logger.error(f"PyPDF extraction also failed: {e}")
         
         return pages
     
@@ -351,7 +424,19 @@ class IngestionService:
         for chunk in chunks:
             task = self._extract_entities_gliner(
                 chunk["text"],
-                labels=["Person", "Organization", "Location", "Concept", "Method", "Chemical"]
+                labels=[
+                    "Person",
+                    "Organization",
+                    "Location",
+                    "Concept",
+                    "Method",
+                    "Chemical",
+                    "Date",
+                    "Event",
+                    "Work",
+                    "Title",
+                    "Institution"
+                ]
             )
             extraction_tasks.append((chunk, task))
         
@@ -363,8 +448,7 @@ class IngestionService:
         for (chunk, _), entities_or_error in zip(extraction_tasks, results):
             if isinstance(entities_or_error, Exception):
                 logger.error(f"Entity extraction failed for chunk {chunk['chunk_index']}: {entities_or_error}")
-                processed_count += 1
-                continue
+                raise entities_or_error
             
             entities = entities_or_error
             chunk_uuid = uuid.uuid5(doc_id, f"chunk-{chunk['chunk_index']}")
@@ -375,13 +459,14 @@ class IngestionService:
             for entity in entities:
                 # Create node
                 node_id = uuid.uuid4()
+                # PERFORMANCE FIX: Use new document_id FK instead of storing in JSONB
                 node = Node(
                     id=node_id,
                     label=entity.get("type", "Entity"),
+                    document_id=doc_id,  # Set explicit FK
                     properties={
                         "name": entity["name"],
                         "description": entity.get("description", ""),
-                        "document_id": str(doc_id),
                         "chunk_id": str(chunk_uuid),
                         "page_number": chunk["page_number"],
                         "confidence": entity.get("confidence", 0.8)
@@ -398,12 +483,13 @@ class IngestionService:
             if len(entity_nodes) > 1:
                 for i, node1 in enumerate(entity_nodes):
                     for node2 in entity_nodes[i+1:]:
+                        # PERFORMANCE FIX: Use new document_id FK instead of storing in JSONB
                         edge = Edge(
                             source_id=node1.id,
                             target_id=node2.id,
                             type="CO_OCCURS",
+                            document_id=doc_id,  # Set explicit FK
                             properties={
-                                "document_id": str(doc_id),
                                 "chunk_id": str(chunk_uuid),
                                 "context": chunk["text"][:200]
                             }
@@ -499,15 +585,56 @@ class IngestionService:
             List of entity dictionaries with name, type, description, and confidence
         """
         if labels is None:
-            labels = ["Person", "Organization", "Location", "Concept", "Method", "Chemical"]
+            labels = [
+                "Person",
+                "Organization",
+                "Location",
+                "Concept",
+                "Method",
+                "Chemical",
+                "Date",
+                "Event",
+                "Work",
+                "Title",
+                "Institution"
+            ]
+        
+        # Check if GLiNER is available
+        if self.gliner_model is None:
+            logger.error("GLiNER model is not loaded. Cannot extract entities.")
+            raise RuntimeError("GLiNER model not available - entity extraction required")
         
         try:
             # Run GLiNER in executor (CPU-bound but fast)
+            # Split large chunks into smaller windows to improve recall
             loop = asyncio.get_event_loop()
-            predictions = await loop.run_in_executor(
-                self.executor,
-                lambda: self.gliner_model.predict_entities(text, labels=labels, threshold=0.3)
-            )
+            window_size = 1200
+            overlap = 150
+            windows = []
+            if len(text) <= window_size:
+                windows = [text]
+            else:
+                start = 0
+                while start < len(text):
+                    end = min(len(text), start + window_size)
+                    windows.append(text[start:end])
+                    if end == len(text):
+                        break
+                    start = end - overlap
+
+            def _predict_all():
+                all_preds = []
+                for window_text in windows:
+                    all_preds.extend(
+                        self.gliner_model.predict_entities(
+                            window_text,
+                            labels=labels,
+                            threshold=0.2
+                        )
+                    )
+                return all_preds
+
+            predictions = await loop.run_in_executor(self.executor, _predict_all)
             
             # Convert GLiNER format to our internal format
             entities = []
@@ -535,7 +662,12 @@ class IngestionService:
                     "Location": "location",
                     "Concept": "concept",
                     "Method": "method",
-                    "Chemical": "chemical"
+                    "Chemical": "chemical",
+                    "Date": "date",
+                    "Event": "event",
+                    "Work": "work",
+                    "Title": "title",
+                    "Institution": "institution"
                 }
                 mapped_type = type_mapping.get(entity_type, "concept")
                 

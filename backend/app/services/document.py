@@ -214,9 +214,9 @@ class DocumentService:
             
             # 3. Delete related nodes and edges from knowledge graph
             try:
-                # Find all nodes associated with this document
+                # Find all nodes associated with this document using the document_id FK
                 nodes = session.query(Node).filter(
-                    Node.properties['document_id'].astext == doc_id_str
+                    Node.document_id == doc_uuid
                 ).all()
                 
                 node_ids = [node.id for node in nodes]
@@ -227,9 +227,9 @@ class DocumentService:
                         (Edge.source_id.in_(node_ids)) | (Edge.target_id.in_(node_ids))
                     ).delete(synchronize_session=False)
                     
-                    # Delete the nodes themselves
+                    # Delete the nodes themselves using document_id FK (more efficient)
                     nodes_deleted = session.query(Node).filter(
-                        Node.id.in_(node_ids)
+                        Node.document_id == doc_uuid
                     ).delete(synchronize_session=False)
                     
                     logger.info(f"Deleted {nodes_deleted} nodes and {edges_deleted} edges from knowledge graph for document {doc_id_str}")

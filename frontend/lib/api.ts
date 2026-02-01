@@ -1,5 +1,38 @@
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
+// PERFORMANCE FIX: Add request timeout
+const API_TIMEOUT = 30000; // 30 seconds
+const CHAT_TIMEOUT = 120000; // 120 seconds for LLM responses
+
+// Helper function to handle API errors consistently
+async function handleResponse<T>(response: Response): Promise<T> {
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({ detail: response.statusText }));
+    const errorMessage = errorData.detail || response.statusText;
+    throw new Error(`API Error (${response.status}): ${errorMessage}`);
+  }
+  return response.json();
+}
+
+// Helper to add timeout to fetch calls
+async function fetchWithTimeout(
+  url: string,
+  options: RequestInit = {},
+  timeout: number = API_TIMEOUT
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 export interface FileInfo {
   filename: string;
   doc_id: string;
@@ -57,38 +90,25 @@ export const api = {
     const formData = new FormData();
     formData.append('file', file);
     
-    const response = await fetch(`${API_BASE_URL}/ingest`, {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/ingest`, {
       method: 'POST',
       body: formData,
     });
     
-    if (!response.ok) {
-      throw new Error(`Upload failed: ${response.statusText}`);
-    }
-    
-    return response.json();
+    return handleResponse(response);
   },
 
   async listFiles(): Promise<FileInfo[]> {
-    const response = await fetch(`${API_BASE_URL}/files`);
-    
-    if (!response.ok) {
-      throw new Error(`Failed to list files: ${response.statusText}`);
-    }
-    
-    return response.json();
+    const response = await fetchWithTimeout(`${API_BASE_URL}/files`);
+    return handleResponse(response);
   },
 
   async deleteFile(docId: string): Promise<any> {
-    const response = await fetch(`${API_BASE_URL}/files/${encodeURIComponent(docId)}`, {
-      method: 'DELETE',
-    });
-    
-    if (!response.ok) {
-      throw new Error(`Delete failed: ${response.statusText}`);
-    }
-    
-    return response.json();
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/files/${encodeURIComponent(docId)}`,
+      { method: 'DELETE' }
+    );
+    return handleResponse(response);
   },
 
   getFileUrl(docId: string): string {
@@ -97,19 +117,15 @@ export const api = {
 
   // Chat
   async chat(query: string): Promise<ChatResponse> {
-    const response = await fetch(`${API_BASE_URL}/chat`, {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/chat`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ query }),
-    });
+    }, CHAT_TIMEOUT);
     
-    if (!response.ok) {
-      throw new Error(`Chat failed: ${response.statusText}`);
-    }
-    
-    return response.json();
+    return handleResponse(response);
   },
 
   // Entities & Relationships
@@ -118,27 +134,20 @@ export const api = {
     if (params?.entity_type) q.append('entity_type', params.entity_type);
     if (params?.document_id) q.append('document_id', params.document_id);
     q.append('limit', String(params?.limit ?? 50));
-    const response = await fetch(`${API_BASE_URL}/entities?${q.toString()}`);
-    if (!response.ok) {
-      throw new Error(`Failed to list entities: ${response.statusText}`);
-    }
-    return response.json();
+    const response = await fetchWithTimeout(`${API_BASE_URL}/entities?${q.toString()}`);
+    return handleResponse(response);
   },
 
   async getEntityRelationships(entityId: string, direction: 'outgoing' | 'incoming' | 'both' = 'both'): Promise<RelationshipInfo[]> {
-    const response = await fetch(`${API_BASE_URL}/entities/${encodeURIComponent(entityId)}/relationships?direction=${direction}`);
-    if (!response.ok) {
-      throw new Error(`Failed to get relationships: ${response.statusText}`);
-    }
-    return response.json();
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/entities/${encodeURIComponent(entityId)}/relationships?direction=${direction}`
+    );
+    return handleResponse(response);
   },
 
   async getEntityTypes(): Promise<Array<{ type: string; count: number }>> {
-    const response = await fetch(`${API_BASE_URL}/graph/types`);
-    if (!response.ok) {
-      throw new Error(`Failed to get entity types: ${response.statusText}`);
-    }
-    const data = await response.json();
+    const response = await fetchWithTimeout(`${API_BASE_URL}/graph/types`);
+    const data = await handleResponse<{ entity_types: Array<{ type: string; count: number }> }>(response);
     return data.entity_types;
   },
 
@@ -146,10 +155,7 @@ export const api = {
     const url = documentId 
       ? `${API_BASE_URL}/graph/full?document_id=${encodeURIComponent(documentId)}`
       : `${API_BASE_URL}/graph/full`;
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`Failed to get full graph: ${response.statusText}`);
-    }
-    return response.json();
+    const response = await fetchWithTimeout(url);
+    return handleResponse(response);
   },
 };

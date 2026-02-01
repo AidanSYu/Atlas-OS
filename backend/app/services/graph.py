@@ -1,6 +1,6 @@
 """Graph service for querying nodes and edges."""
 from typing import List, Dict, Any, Optional
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_, func
 
 from app.core.database import get_session, Node, Edge
@@ -23,21 +23,13 @@ class GraphService:
         from app.core.database import Document
         session = get_session()
         try:
-            # Get all active (non-deleted) document IDs
-            active_docs = session.query(Document).filter(
+            # PERFORMANCE FIX A+B: Use JOIN instead of Python list filtering
+            # Join Node with Document and filter on status directly in SQL
+            query = session.query(Node).join(
+                Document,
+                Node.document_id == Document.id
+            ).filter(
                 Document.status == "completed"
-            ).all()
-            active_doc_ids = [str(doc.id) for doc in active_docs]
-            
-            if not active_doc_ids:
-                # No active documents - return empty
-                return []
-            
-            query = session.query(Node)
-            
-            # Filter to only nodes from active documents using .in_() operator
-            query = query.filter(
-                Node.properties['document_id'].astext.in_(active_doc_ids)
             )
             
             if label:
@@ -45,10 +37,9 @@ class GraphService:
             
             if document_id:
                 try:
-                    # Additional filter for specific document if provided
-                    query = query.filter(
-                        Node.properties['document_id'].astext == document_id
-                    )
+                    from uuid import UUID
+                    doc_uuid = UUID(document_id)
+                    query = query.filter(Node.document_id == doc_uuid)
                 except ValueError:
                     pass
             
@@ -74,12 +65,20 @@ class GraphService:
             
             relationships = []
             
+            # PERFORMANCE FIX A: Use joinedload to eager-load source and target nodes
+            # This prevents N+1 queries in _edge_to_dict
             if direction in ["outgoing", "both"]:
-                query = session.query(Edge).filter(Edge.source_id == node_uuid)
+                query = session.query(Edge).options(
+                    joinedload(Edge.source_node),
+                    joinedload(Edge.target_node)
+                ).filter(Edge.source_id == node_uuid)
                 relationships.extend(query.all())
             
             if direction in ["incoming", "both"]:
-                query = session.query(Edge).filter(Edge.target_id == node_uuid)
+                query = session.query(Edge).options(
+                    joinedload(Edge.source_node),
+                    joinedload(Edge.target_node)
+                ).filter(Edge.target_id == node_uuid)
                 relationships.extend(query.all())
             
             return [self._edge_to_dict(r, session) for r in relationships]
@@ -118,33 +117,20 @@ class GraphService:
         from app.core.database import Document
         session = get_session()
         try:
-            # Step 1: Get all active (non-deleted) document IDs
-            active_docs = session.query(Document).filter(
+            # PERFORMANCE FIX B: Use JOIN instead of Python list filtering
+            # Query nodes via JOIN with Document to filter by status in SQL
+            node_query = session.query(Node).join(
+                Document,
+                Node.document_id == Document.id
+            ).filter(
                 Document.status == "completed"
-            ).all()
-            active_doc_ids = [str(doc.id) for doc in active_docs]
-            
-            if not active_doc_ids:
-                # No active documents - return empty graph
-                return {
-                    "nodes": [],
-                    "edges": []
-                }
-            
-            # Step 2: Get all nodes from active documents only using optimized .in_() query
-            node_query = session.query(Node)
-            
-            # Filter to only nodes from active documents using .in_() operator
-            node_query = node_query.filter(
-                Node.properties['document_id'].astext.in_(active_doc_ids)
             )
             
             if document_id:
                 try:
-                    # Additional filter for specific document if provided
-                    node_query = node_query.filter(
-                        Node.properties['document_id'].astext == document_id
-                    )
+                    from uuid import UUID
+                    doc_uuid = UUID(document_id)
+                    node_query = node_query.filter(Node.document_id == doc_uuid)
                 except ValueError:
                     pass
             
@@ -155,9 +141,16 @@ class GraphService:
             # Get node IDs as set for efficient lookup
             node_ids = {n.id for n in nodes}
             
-            # Step 3: Get all edges where both source and target exist in the node list
+            # PERFORMANCE FIX D: Get edges more efficiently
+            # Option: Get edges where BOTH source and target are in the loaded nodes (safer for viz)
+            # OR: Get edges where AT LEAST ONE endpoint is in loaded nodes (shows external connections)
+            # Default: BOTH (safer, prevents graph explosion) - can be made configurable
             if node_ids:
-                edges = session.query(Edge).filter(
+                # Get edges with both endpoints in the loaded nodes
+                edges = session.query(Edge).options(
+                    joinedload(Edge.source_node),
+                    joinedload(Edge.target_node)
+                ).filter(
                     Edge.source_id.in_(node_ids),
                     Edge.target_id.in_(node_ids)
                 ).all()
@@ -180,14 +173,15 @@ class GraphService:
             "name": props.get("name", "Unknown"),
             "type": node.label,
             "description": props.get("description"),
-            "document_id": props.get("document_id", "")
+            "document_id": str(node.document_id) if node.document_id else props.get("document_id", "")
         }
     
     def _edge_to_dict(self, edge: Edge, session: Session) -> Dict[str, Any]:
         """Convert Edge ORM object to dictionary."""
-        # Get source and target nodes
-        source = session.query(Node).filter(Node.id == edge.source_id).first()
-        target = session.query(Node).filter(Node.id == edge.target_id).first()
+        # PERFORMANCE FIX A: Use pre-loaded relationships instead of querying DB
+        # Source and target nodes are already loaded via joinedload() in parent queries
+        source = edge.source_node
+        target = edge.target_node
         
         source_props = source.properties if source else {}
         target_props = target.properties if target else {}
