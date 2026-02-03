@@ -10,8 +10,10 @@ sqlalchemy==2.0.25
 # Vector Store
 qdrant-client==1.7.0
 
-# LLM & Embeddings
-ollama==0.1.6
+# LLM & Embeddings (bundled for desktop app)
+llama-cpp-python>=0.2.55
+sentence-transformers>=2.3.1
+huggingface-hub>=0.20.0
 
 # Document Processing
 pypdf==4.0.1

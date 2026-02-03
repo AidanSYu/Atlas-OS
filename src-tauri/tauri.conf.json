@@ -1,0 +1,105 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/schema.json",
+  "build": {
+    "beforeBuildCommand": "npm run build",
+    "beforeDevCommand": "npm run dev",
+    "devPath": "http://localhost:3000",
+    "distDir": "../frontend/out"
+  },
+  "package": {
+    "productName": "Atlas",
+    "version": "2.0.0"
+  },
+  "tauri": {
+    "allowlist": {
+      "all": false,
+      "shell": {
+        "all": false,
+        "sidecar": true,
+        "scope": [
+          {
+            "name": "atlas-backend",
+            "sidecar": true
+          },
+          {
+            "name": "postgres",
+            "sidecar": true
+          },
+          {
+            "name": "qdrant",
+            "sidecar": true
+          }
+        ]
+      },
+      "path": {
+        "all": true
+      },
+      "fs": {
+        "all": true,
+        "scope": ["$APP/**", "$RESOURCE/**"]
+      },
+      "dialog": {
+        "all": true
+      },
+      "window": {
+        "all": true
+      },
+      "process": {
+        "all": true
+      }
+    },
+    "bundle": {
+      "active": true,
+      "category": "Productivity",
+      "copyright": "Copyright 2024 Atlas Team",
+      "deb": {
+        "depends": []
+      },
+      "externalBin": ["binaries/atlas-backend"],
+      "icon": [
+        "icons/32x32.png",
+        "icons/128x128.png",
+        "icons/128x128@2x.png",
+        "icons/icon.icns",
+        "icons/icon.ico"
+      ],
+      "identifier": "com.atlas.knowledge",
+      "longDescription": "Atlas is an AI-native knowledge management system that combines vector search, knowledge graphs, and local LLMs for intelligent document retrieval and analysis.",
+      "macOS": {
+        "entitlements": null,
+        "exceptionDomain": "",
+        "frameworks": [],
+        "providerShortName": null,
+        "signingIdentity": null
+      },
+      "resources": [
+        "resources/*"
+      ],
+      "shortDescription": "AI-Native Knowledge Management",
+      "targets": "all",
+      "windows": {
+        "certificateThumbprint": null,
+        "digestAlgorithm": "sha256",
+        "timestampUrl": ""
+      }
+    },
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:8000 http://localhost:8000 https://tauri.localhost https://cdnjs.cloudflare.com; script-src 'self' https://cdnjs.cloudflare.com; worker-src 'self' https://cdnjs.cloudflare.com blob:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'"
+    },
+    "updater": {
+      "active": false
+    },
+    "windows": [
+      {
+        "fullscreen": false,
+        "height": 900,
+        "resizable": true,
+        "title": "Atlas - Knowledge Management",
+        "width": 1400,
+        "minWidth": 800,
+        "minHeight": 600,
+        "center": true
+      }
+    ]
+  }
+}

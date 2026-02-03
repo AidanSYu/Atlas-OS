@@ -16,9 +16,11 @@ export default function Home() {
   const [pdfPage, setPdfPage] = useState<number>(1);
   const [centerDimensions, setCenterDimensions] = useState({ width: 800, height: 600 });
 
-  const handleCitationClick = (filename: string, page: number) => {
-    // We only have filename here; PDF view needs docId to stream.
-    // The sidebar click sets both; citation jumps will just switch to Document tab.
+  const handleCitationClick = (filename: string, page: number, docId?: string) => {
+    if (docId) {
+      setSelectedDocId(docId);
+      setSelectedFilename(filename);
+    }
     setPdfPage(page);
     setActiveView('document');
   };

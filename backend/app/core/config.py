@@ -1,4 +1,4 @@
-"""Configuration settings for Atlas application."""
+"""Configuration settings for Atlas application (Production Desktop)."""
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 
@@ -12,8 +12,8 @@ class Settings(BaseSettings):
         extra="ignore"
     )
 
-    # PostgreSQL Configuration
-    POSTGRES_HOST: str = "db_graph"
+    # PostgreSQL Configuration (Required - no fallbacks)
+    POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432
     POSTGRES_DB: str = "atlas_knowledge"
     POSTGRES_USER: str = "atlas"
@@ -27,22 +27,19 @@ class Settings(BaseSettings):
             f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
         )
     
-    # Qdrant Configuration
-    QDRANT_HOST: str = "db_vector"
+    # Qdrant Configuration (Required - no fallbacks)
+    QDRANT_HOST: str = "localhost"
     QDRANT_PORT: int = 6333
     QDRANT_COLLECTION: str = "atlas_documents"
     
-    # Ollama Configuration
-    # Auto-detect Docker environment
-    OLLAMA_BASE_URL: str = "http://host.docker.internal:11434"  # Default for Docker Desktop
-    OLLAMA_MODEL: str = "llama3"
-    OLLAMA_EMBEDDING_MODEL: str = "nomic-embed-text"
+    # Model Storage (for bundled LLM and NER models)
+    MODELS_DIR: str = "./models"
     
     # File Storage
-    UPLOAD_DIR: str = "/app/data/uploads"
+    UPLOAD_DIR: str = "./data/uploads"
     
     # API Configuration
-    API_HOST: str = "0.0.0.0"
+    API_HOST: str = "127.0.0.1"
     API_PORT: int = 8000
     
     # Processing Configuration
@@ -55,3 +52,4 @@ settings = Settings()
 
 # Ensure directories exist
 Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
+Path(settings.MODELS_DIR).mkdir(parents=True, exist_ok=True)

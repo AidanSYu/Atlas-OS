@@ -15,35 +15,37 @@ from app.core.config import settings
 
 router = APIRouter()
 
-# Initialize services lazily to avoid startup failures when dependencies are down
+# Initialize services lazily - FATAL on failure (no silent degradation in production)
 chat_service = None
 ingestion_service = None
 document_service = None
 graph_service = None
 
+logger = logging.getLogger(__name__)
+
 def ensure_services():
-    """Initialize services if not already created, handling dependency errors gracefully."""
+    """Initialize services - FATAL on failure.
+    
+    Production desktop app requires all services to be available.
+    No silent failures or degraded modes.
+    """
     global chat_service, ingestion_service, document_service, graph_service
+    
     if document_service is None:
-        try:
-            document_service = DocumentService()
-        except Exception:
-            document_service = None
+        document_service = DocumentService()
+        logger.info("DocumentService initialized")
+    
     if graph_service is None:
-        try:
-            graph_service = GraphService()
-        except Exception:
-            graph_service = None
+        graph_service = GraphService()
+        logger.info("GraphService initialized")
+    
     if chat_service is None:
-        try:
-            chat_service = ChatService()
-        except Exception:
-            chat_service = None
+        chat_service = ChatService()
+        logger.info("ChatService initialized")
+    
     if ingestion_service is None:
-        try:
-            ingestion_service = IngestionService()
-        except Exception:
-            ingestion_service = None
+        ingestion_service = IngestionService()
+        logger.info("IngestionService initialized")
 
 
 # ============================================================
@@ -73,31 +75,32 @@ async def root():
     return {
         "status": "online",
         "service": "Atlas API - AI-Native Knowledge Layer",
-        "version": "2.0.0",
+        "version": "2.0.0-desktop",
         "architecture": {
-            "vector_store": "Qdrant",
-            "knowledge_graph": "PostgreSQL (Triple Store)",
-            "llm": "Ollama (local)",
+            "vector_store": "Qdrant (embedded)",
+            "knowledge_graph": "PostgreSQL (embedded)",
+            "llm": "llama-cpp-python (bundled)",
         },
     }
 
 
 @router.get("/health")
 async def health_check():
-    """Health check of all services."""
-    try:
-        ensure_services()
-        return {
-            "status": "healthy",
-            "services": {
-                "api": "online",
-                "qdrant": "available" if chat_service is not None else "unavailable",
-                "postgres": "available" if document_service is not None else "unavailable",
-                "ollama": "configured",
-            },
-        }
-    except Exception as e:
-        return {"status": "degraded", "error": str(e)}
+    """Health check of all services.
+    
+    In production desktop mode, all services must be available.
+    Any failure raises an exception (no degraded mode).
+    """
+    ensure_services()
+    return {
+        "status": "healthy",
+        "services": {
+            "api": "online",
+            "qdrant": "online",
+            "postgres": "online",
+            "llm": "online",
+        },
+    }
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -107,15 +110,13 @@ async def chat(request: ChatRequest):
     if chat_service is None:
         raise HTTPException(
             status_code=503,
-            detail="Chat service unavailable (vector store / Ollama not reachable)",
+            detail="Chat service unavailable (LLM service not reachable)",
         )
     try:
         result = await chat_service.chat(request.query)
         return ChatResponse(**result)
     except Exception as e:
-        import traceback
-
-        traceback.print_exc()
+        logger.exception(f"Query error for request: {request.query[:100]}...")
         raise HTTPException(status_code=500, detail=f"Query error: {str(e)}")
 
 

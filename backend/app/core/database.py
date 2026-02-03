@@ -185,11 +185,21 @@ def get_session():
 
 
 def init_db():
-    """Initialize database and create all tables."""
-    engine = get_engine()
-    Base.metadata.create_all(engine)
-    _ensure_schema(engine)
-    return engine
+    """Initialize database and create all tables.
+    
+    FATAL: Raises RuntimeError if PostgreSQL connection fails.
+    No silent failures allowed in production.
+    """
+    try:
+        engine = get_engine()
+        # Test connection before proceeding
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        Base.metadata.create_all(engine)
+        _ensure_schema(engine)
+        return engine
+    except Exception as e:
+        raise RuntimeError(f"FATAL: PostgreSQL connection failed: {e}") from e
 
 
 def reset_db():

@@ -7,6 +7,8 @@ Pipeline:
 3. Store chunks in PostgreSQL
 4. Embed and index in Qdrant (with node_id references)
 5. Extract entities and create graph nodes/edges
+
+Production Desktop App: Uses bundled llama-cpp-python instead of Ollama.
 """
 from typing import List, Dict, Any, Optional
 from pathlib import Path
@@ -23,11 +25,11 @@ try:
 except ImportError:
     PDFPLUMBER_AVAILABLE = False
 from pypdf import PdfReader
-from ollama import AsyncClient
 from sqlalchemy.orm import Session
 
 from app.core.database import get_session, Node, Edge, Document, DocumentChunk
 from app.core.config import settings
+from app.services.llm import LLMService
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
 from datetime import datetime
@@ -42,8 +44,9 @@ class IngestionService:
     """Orchestrates document ingestion across all knowledge layers."""
     
     def __init__(self):
-        # Initialize Ollama async client for GPU-bound operations
-        self.ollama_client = AsyncClient(host=settings.OLLAMA_BASE_URL)
+        # Initialize LLM service (bundled llama-cpp-python)
+        self.llm_service = LLMService.get_instance()
+        
         self.qdrant_client = QdrantClient(
             host=settings.QDRANT_HOST,
             port=settings.QDRANT_PORT
@@ -54,40 +57,34 @@ class IngestionService:
         self.executor = ThreadPoolExecutor(max_workers=4)
         
         # Initialize GLiNER model for entity extraction (required)
+        # Uses local model path for desktop app bundling
         try:
             from gliner import GLiNER
-            self.gliner_model = GLiNER.from_pretrained("urchade/gliner_small-v2.1")
-            logger.info("✅ Loaded GLiNER model 'urchade/gliner_small-v2.1' for NER")
+            gliner_path = Path(settings.MODELS_DIR) / "gliner_small-v2.1"
+            if gliner_path.exists():
+                self.gliner_model = GLiNER.from_pretrained(str(gliner_path))
+                logger.info(f"Loaded GLiNER model from {gliner_path}")
+            else:
+                # Fall back to downloading from HuggingFace (first run)
+                logger.warning(f"GLiNER model not found at {gliner_path}, downloading...")
+                self.gliner_model = GLiNER.from_pretrained("urchade/gliner_small-v2.1")
+                logger.info("Loaded GLiNER model from HuggingFace")
         except Exception as e:
-            logger.error(f"❌ GLiNER entity extraction unavailable: {e}")
+            logger.error(f"GLiNER entity extraction unavailable: {e}")
             raise RuntimeError("GLiNER model is required for ingestion. Fix the model install/config and retry.") from e
         
-        # Note: Async validation happens on first use
-        # Collection setup happens on first use
+        logger.info("IngestionService initialized")
     
-    async def _validate_ollama_connection(self):
-        """Validate Ollama connection and required models (async)."""
+    async def _validate_llm_connection(self):
+        """Validate LLM service connection (async)."""
         try:
-            # Test connection with a simple embedding
-            logger.info(f"Testing Ollama connection to {settings.OLLAMA_BASE_URL}")
-            test_response = await self.ollama_client.embeddings(
-                model=settings.OLLAMA_EMBEDDING_MODEL,
-                prompt="test connection"
-            )
-            logger.info("✅ Ollama embedding model connection successful")
-            
-            # Test generation model
-            gen_response = await self.ollama_client.generate(
-                model=settings.OLLAMA_MODEL,
-                prompt="test",
-                options={"temperature": 0.1}
-            )
-            logger.info("✅ Ollama generation model connection successful")
-            
+            # Test embedding
+            logger.info("Testing LLM service connection...")
+            test_embedding = await self.llm_service.embed("test connection")
+            logger.info(f"LLM embedding service ready (dimension: {len(test_embedding)})")
         except Exception as e:
-            logger.error(f"❌ Ollama connection failed: {str(e)}")
-            logger.error(f"Make sure Ollama is running and models '{settings.OLLAMA_MODEL}' and '{settings.OLLAMA_EMBEDDING_MODEL}' are installed")
-            raise ConnectionError(f"Ollama connection failed: {str(e)}")
+            logger.error(f"LLM connection failed: {str(e)}")
+            raise ConnectionError(f"LLM connection failed: {str(e)}")
     
     async def _ensure_collection(self):
         """Create Qdrant collection if it doesn't exist (async)."""
@@ -95,16 +92,9 @@ class IngestionService:
         collection_names = [c.name for c in collections]
         
         if self.collection_name not in collection_names:
-            # Get embedding dimension from Ollama (async call)
-            try:
-                response = await self.ollama_client.embeddings(
-                    model=settings.OLLAMA_EMBEDDING_MODEL,
-                    prompt="test"
-                )
-                dimension = len(response['embedding'])
-            except Exception as e:
-                logger.warning(f"Failed to get embedding dimension, using default 768: {e}")
-                dimension = 768  # Default for nomic-embed-text
+            # Get embedding dimension from LLM service
+            dimension = self.llm_service.embedding_dimension
+            logger.info(f"Creating Qdrant collection with dimension {dimension}")
             
             self.qdrant_client.create_collection(
                 collection_name=self.collection_name,
@@ -115,13 +105,8 @@ class IngestionService:
             )
     
     async def _embed_text(self, text: str) -> List[float]:
-        """Generate embedding using Ollama (async, GPU-bound)."""
-        # Direct async call - Ollama server handles GPU utilization
-        response = await self.ollama_client.embeddings(
-            model=settings.OLLAMA_EMBEDDING_MODEL,
-            prompt=text
-        )
-        return response['embedding']
+        """Generate embedding using bundled LLM service."""
+        return await self.llm_service.embed(text)
     
     def _calculate_hash(self, file_path: str) -> str:
         """Calculate SHA256 hash of file."""

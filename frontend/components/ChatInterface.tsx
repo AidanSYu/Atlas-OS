@@ -5,7 +5,7 @@ import { Send, Bot, User, FileText } from 'lucide-react';
 import { api, ChatMessage, Citation } from '@/lib/api';
 
 interface ChatInterfaceProps {
-  onCitationClick: (filename: string, page: number) => void;
+  onCitationClick: (filename: string, page: number, docId?: string) => void;
 }
 
 export default function ChatInterface({ onCitationClick }: ChatInterfaceProps) {
@@ -69,7 +69,7 @@ export default function ChatInterface({ onCitationClick }: ChatInterfaceProps) {
     return (
       <button
         key={index}
-        onClick={() => onCitationClick(citation.source, citation.page)}
+        onClick={() => onCitationClick(citation.source, citation.page, citation.doc_id)}
         className="inline-flex items-center gap-1 px-2 py-1 text-xs bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-md transition-colors mr-1 mb-1"
         title={`Open ${citation.source} at page ${citation.page}`}
       >

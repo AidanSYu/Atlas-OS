@@ -1,7 +1,20 @@
+# DEPRECATED: This compose file is for reference only.
+#
+# Atlas 2.0 is now a Tauri desktop app. PostgreSQL and Qdrant
+# are bundled as Windows sidecar executables, not Docker containers.
+#
+# This file is kept for historical reference (old Docker-based setup).
+# It is NOT used in the current build pipeline or production deployment.
+#
+# For development with the Tauri desktop app:
+#   npm run tauri:dev     # Backend/Postgres/Qdrant run as sidecars
+#   npm run tauri:build   # Create Windows installer
+#
+
 version: '3.8'
 
 services:
-  # PostgreSQL - Knowledge Graph (Triple Store)
+  # PostgreSQL - Knowledge Graph (Triple Store) - FOR REFERENCE ONLY
   db_graph:
     image: postgres:16-alpine
     container_name: atlas-postgres
@@ -20,7 +33,7 @@ services:
       timeout: 5s
       retries: 5
 
-  # Qdrant - Vector Store
+  # Qdrant - Vector Store - FOR REFERENCE ONLY
   db_vector:
     image: qdrant/qdrant:latest
     container_name: atlas-qdrant

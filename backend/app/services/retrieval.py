@@ -6,6 +6,8 @@ Implements hybrid search combining:
 2. Entity-based matching (LLM-extracted entities from query)
 3. Exact text matching (for dates, numbers, specific phrases)
 4. Document filtering (only active documents)
+
+Production Desktop App: Uses bundled llama-cpp-python instead of Ollama.
 """
 from typing import List, Dict, Any, Optional, Set
 from sqlalchemy.orm import Session, joinedload
@@ -17,9 +19,9 @@ import asyncio
 
 from app.core.database import get_session, Node, Edge, Document
 from app.core.config import settings
+from app.services.llm import LLMService
 from qdrant_client import QdrantClient
 from qdrant_client.models import Filter, FieldCondition, MatchValue
-from ollama import AsyncClient
 
 logger = logging.getLogger(__name__)
 
@@ -28,21 +30,18 @@ class RetrievalService:
     """Handles hybrid retrieval from vector store and knowledge graph."""
     
     def __init__(self):
-        # Initialize Ollama async client for GPU-bound operations
-        self.ollama_client = AsyncClient(host=settings.OLLAMA_BASE_URL)
+        # Initialize LLM service (bundled llama-cpp-python)
+        self.llm_service = LLMService.get_instance()
         self.qdrant_client = QdrantClient(
             host=settings.QDRANT_HOST,
             port=settings.QDRANT_PORT
         )
         self.collection_name = settings.QDRANT_COLLECTION
+        logger.info("RetrievalService initialized")
     
     async def _embed_text(self, text: str) -> List[float]:
-        """Generate embedding using Ollama (async, GPU-bound)."""
-        response = await self.ollama_client.embeddings(
-            model=settings.OLLAMA_EMBEDDING_MODEL,
-            prompt=text
-        )
-        return response['embedding']
+        """Generate embedding using bundled LLM service."""
+        return await self.llm_service.embed(text)
     
     async def _extract_query_entities(self, query: str) -> Dict[str, Any]:
         """Extract entities, dates, and key terms from query using LLM."""
@@ -66,12 +65,11 @@ If no dates/entities found, return empty arrays.
 Example: {{"entities": ["China"], "dates": ["1920", "1930"], "date_ranges": [{{"start": "1920", "end": "1930"}}], "key_phrases": []}}
 """
         try:
-            response = await self.ollama_client.generate(
-                model=settings.OLLAMA_MODEL,
+            response_text = await self.llm_service.generate(
                 prompt=prompt,
-                options={"temperature": 0.1}
+                temperature=0.1,
+                max_tokens=512
             )
-            response_text = response['response'].strip()
             
             # Extract JSON
             start_idx = response_text.find('{')
@@ -126,7 +124,13 @@ Example: {{"entities": ["China"], "dates": ["1920", "1930"], "date_ranges": [{{"
             active_doc_ids = await self._get_active_document_ids(session)
             if not active_doc_ids:
                 return {
-                    "answer": "No documents are available in the knowledge base.",
+                    "status": "no_documents",
+                    "error": {
+                        "code": "KNOWLEDGE_BASE_EMPTY",
+                        "message": "No documents are available in the knowledge base.",
+                        "recoverable": True
+                    },
+                    "answer": "",
                     "context": {
                         "vector_chunks": [],
                         "graph_nodes": [],
@@ -155,7 +159,13 @@ Example: {{"entities": ["China"], "dates": ["1920", "1930"], "date_ranges": [{{"
             
             if not vector_results:
                 return {
-                    "answer": "No relevant documents found to answer this query.",
+                    "status": "no_results",
+                    "error": {
+                        "code": "RETRIEVAL_EMPTY",
+                        "message": "No relevant documents found for the query.",
+                        "recoverable": True
+                    },
+                    "answer": "",
                     "context": {
                         "vector_chunks": [],
                         "graph_nodes": [],
@@ -497,16 +507,15 @@ CRITICAL INSTRUCTIONS:
 ANSWER (with proper citations in the required format):"""
             
             try:
-                # Direct async call - GPU-bound operation
-                response = await self.ollama_client.generate(
-                    model=settings.OLLAMA_MODEL,
+                # Generate answer using bundled LLM
+                answer = await self.llm_service.generate(
                     prompt=prompt,
-                    options={"temperature": 0.1, "top_k": 20, "top_p": 0.8}  # Lower temperature for more precise answers
+                    temperature=0.1,
+                    max_tokens=2048
                 )
                 
-                answer = response['response'].strip()
-                
                 return {
+                    "status": "success",
                     "answer": answer,
                     "context": {
                         "vector_chunks": vector_chunks,
@@ -516,8 +525,15 @@ ANSWER (with proper citations in the required format):"""
                 }
                 
             except Exception as e:
+                logger.error(f"LLM generation failed: {e}", exc_info=True)
                 return {
-                    "answer": f"Error generating answer: {str(e)}",
+                    "status": "generation_failed",
+                    "error": {
+                        "code": "LLM_GENERATION_ERROR",
+                        "message": f"Failed to generate answer: {str(e)}",
+                        "recoverable": False
+                    },
+                    "answer": "",
                     "context": {
                         "vector_chunks": vector_chunks,
                         "graph_nodes": graph_nodes,

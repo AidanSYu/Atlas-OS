@@ -1,64 +1,51 @@
 # Atlas Quick Start Script (PowerShell)
-# This script sets up and starts all Atlas services
+# This script sets up and starts all Atlas services for development
 
-Write-Host "🚀 Atlas Quick Start" -ForegroundColor Cyan
-Write-Host "====================" -ForegroundColor Cyan
+Write-Host "Atlas Quick Start (Development Mode)" -ForegroundColor Cyan
+Write-Host "=====================================" -ForegroundColor Cyan
 Write-Host ""
 
 # Check prerequisites
-Write-Host "📋 Checking prerequisites..." -ForegroundColor Yellow
+Write-Host "Checking prerequisites..." -ForegroundColor Yellow
 
 # Check Python
 try {
     $pythonVersion = python --version 2>&1
-    Write-Host "✅ Python found: $pythonVersion" -ForegroundColor Green
+    Write-Host "Python found: $pythonVersion" -ForegroundColor Green
 } catch {
-    Write-Host "❌ Python not found. Please install Python 3.10+." -ForegroundColor Red
+    Write-Host "Python not found. Please install Python 3.10+." -ForegroundColor Red
     exit 1
 }
 
 # Check Node
 try {
     $nodeVersion = node --version
-    Write-Host "✅ Node.js found: $nodeVersion" -ForegroundColor Green
+    Write-Host "Node.js found: $nodeVersion" -ForegroundColor Green
 } catch {
-    Write-Host "❌ Node.js not found. Please install Node.js 18+." -ForegroundColor Red
-    exit 1
-}
-
-# Check Ollama
-try {
-    ollama --version | Out-Null
-    Write-Host "✅ Ollama found" -ForegroundColor Green
-} catch {
-    Write-Host "❌ Ollama not found. Please install Ollama from https://ollama.ai" -ForegroundColor Red
+    Write-Host "Node.js not found. Please install Node.js 18+." -ForegroundColor Red
     exit 1
 }
 
 Write-Host ""
-Write-Host "🗄️  Checking local services (PostgreSQL :5432, Qdrant :6333)..." -ForegroundColor Yellow
+Write-Host "Checking required services (PostgreSQL :5432, Qdrant :6333)..." -ForegroundColor Yellow
 $pgCheck = Test-NetConnection -ComputerName "localhost" -Port 5432 -WarningAction SilentlyContinue
 $qdrantCheck = Test-NetConnection -ComputerName "localhost" -Port 6333 -WarningAction SilentlyContinue
 if (-not $pgCheck.TcpTestSucceeded) {
-    Write-Host "⚠️  PostgreSQL not reachable on localhost:5432. Please start your local Postgres service." -ForegroundColor Yellow
+    Write-Host "PostgreSQL not reachable on localhost:5432. Please start PostgreSQL." -ForegroundColor Red
+    Write-Host "   You can use: docker-compose up -d" -ForegroundColor Yellow
 }
 if (-not $qdrantCheck.TcpTestSucceeded) {
-    Write-Host "⚠️  Qdrant not reachable on localhost:6333. If you prefer, set VECTOR_BACKEND=local in backend/.env to use the local JSON fallback." -ForegroundColor Yellow
+    Write-Host "Qdrant not reachable on localhost:6333. Please start Qdrant." -ForegroundColor Red
+    Write-Host "   You can use: docker-compose up -d" -ForegroundColor Yellow
 }
-Write-Host "✅ Service checks complete (proceeding regardless; backend will error if both stores are unreachable)." -ForegroundColor Green
-
-Write-Host ""
-Write-Host "🤖 Checking Ollama models..." -ForegroundColor Yellow
-$models = ollama list
-if ($models -notmatch "llama3") {
-    Write-Host "📥 Pulling llama3 model..." -ForegroundColor Cyan
-    ollama pull llama3
+if (-not $pgCheck.TcpTestSucceeded -or -not $qdrantCheck.TcpTestSucceeded) {
+    Write-Host ""
+    Write-Host "Required services are not running. Start them with docker-compose:" -ForegroundColor Yellow
+    Write-Host "   docker-compose up -d" -ForegroundColor Cyan
+    Write-Host ""
+    exit 1
 }
-if ($models -notmatch "nomic-embed-text") {
-    Write-Host "📥 Pulling nomic-embed-text model..." -ForegroundColor Cyan
-    ollama pull nomic-embed-text
-}
-Write-Host "✅ Ollama models ready" -ForegroundColor Green
+Write-Host "Service checks passed" -ForegroundColor Green
 
 Write-Host ""
 Write-Host "🐍 Setting up backend..." -ForegroundColor Yellow
@@ -102,17 +89,20 @@ Set-Location ..
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "✨ Setup complete!" -ForegroundColor Green
+Write-Host "Setup complete!" -ForegroundColor Green
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "📍 Service URLs:" -ForegroundColor Yellow
+Write-Host "Service URLs:" -ForegroundColor Yellow
 Write-Host "   Frontend:  http://localhost:3000"
 Write-Host "   Backend:   http://localhost:8000"
-Write-Host "   Postgres:  localhost:5432 (configure in backend/.env)"
-Write-Host "   Qdrant:    http://localhost:6333 (or VECTOR_BACKEND=local)"
+Write-Host "   Postgres:  localhost:5432"
+Write-Host "   Qdrant:    http://localhost:6333"
+Write-Host ""
+Write-Host "Note: This script is for development. For production," -ForegroundColor Yellow
+Write-Host "      use the desktop app or run 'python run_server.py'" -ForegroundColor Yellow
 Write-Host ""
 Write-Host "To start the services manually:" -ForegroundColor Yellow
-Write-Host "   1. Backend:  cd backend; python -m app.main"
+Write-Host "   1. Backend:  cd backend; python run_server.py"
 Write-Host "   2. Frontend: cd frontend; npm run dev"
 Write-Host ""
 

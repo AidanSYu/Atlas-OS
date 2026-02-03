@@ -1,8 +1,32 @@
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+// Detect if running in Tauri desktop app
+declare global {
+  interface Window {
+    __TAURI__?: {
+      tauri?: any;
+      window?: any;
+    };
+  }
+}
 
-// PERFORMANCE FIX: Add request timeout
+/**
+ * Get the API base URL dynamically.
+ * In Tauri, always use the local sidecar server.
+ * In development, use the environment variable or localhost.
+ */
+function getApiBaseUrl(): string {
+  // In Tauri desktop app, always use local sidecar
+  if (typeof window !== 'undefined' && window.__TAURI__) {
+    return 'http://127.0.0.1:8000';
+  }
+  // Development or web deployment
+  return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+}
+
+const API_BASE_URL = getApiBaseUrl();
+
+// Timeouts
 const API_TIMEOUT = 30000; // 30 seconds
-const CHAT_TIMEOUT = 120000; // 120 seconds for LLM responses
+const CHAT_TIMEOUT = 180000; // 180 seconds for LLM responses (bundled LLM may be slower)
 
 // Helper function to handle API errors consistently
 async function handleResponse<T>(response: Response): Promise<T> {
@@ -54,6 +78,7 @@ export interface ChatMessage {
 export interface Citation {
   source: string; // filename
   page: number;
+  doc_id?: string; // for opening PDF in viewer
   relevance?: number;
   text?: string;
 }
