@@ -81,3 +81,26 @@ frontend/.env*.local
 
 # Vercel
 frontend/.vercel
+
+# Tauri / Rust
+src-tauri/target/
+src-tauri/binaries/*.exe
+src-tauri/binaries/*.dll
+src-tauri/resources/postgres/
+src-tauri/resources/qdrant/
+
+# PyInstaller build artifacts
+backend/build/
+backend/dist/
+backend/*.spec.bak
+
+# Node modules (root)
+node_modules/
+
+# Build outputs (installers should go to GitHub Releases, not repo)
+*.msi
+*.exe
+*.dmg
+*.app
+*.AppImage
+*.deb
