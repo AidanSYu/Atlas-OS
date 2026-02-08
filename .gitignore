@@ -96,6 +96,11 @@ src-tauri/binaries/*.exe
 src-tauri/binaries/*.dll
 src-tauri/resources/postgres/
 src-tauri/resources/qdrant/
+src-tauri/target/
+src-tauri/binaries/
+src-tauri/resources/qdrant/
+src-tauri/resources/atlas-backend/
+src-tauri/target/release/bundle/
 
 # PyInstaller build artifacts
 backend/build/
