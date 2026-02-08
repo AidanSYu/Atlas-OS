@@ -104,8 +104,8 @@ export function SetupWizard({ onComplete, onSkip }: SetupWizardProps) {
 
       case 'database':
       case 'vector':
-      case 'models':
-        // Check health endpoint which verifies all services
+      case 'models': {
+        // Check health endpoint (lightweight - just confirms server is up)
         const response = await fetch(`${baseUrl}/health`, {
           method: 'GET',
           headers: { 'Content-Type': 'application/json' },
@@ -121,6 +121,7 @@ export function SetupWizard({ onComplete, onSkip }: SetupWizardProps) {
           throw new Error(`Service unhealthy: ${JSON.stringify(health)}`);
         }
         break;
+      }
 
       default:
         throw new Error(`Unknown step: ${stepId}`);

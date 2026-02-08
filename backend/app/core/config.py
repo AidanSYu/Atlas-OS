@@ -1,4 +1,4 @@
-"""Configuration settings for Atlas application (Production Desktop)."""
+"""Configuration settings for Atlas application (Embedded Desktop Sidecar)."""
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 
@@ -12,24 +12,16 @@ class Settings(BaseSettings):
         extra="ignore"
     )
 
-    # PostgreSQL Configuration (Required - no fallbacks)
-    POSTGRES_HOST: str = "localhost"
-    POSTGRES_PORT: int = 5432
-    POSTGRES_DB: str = "atlas_knowledge"
-    POSTGRES_USER: str = "atlas"
-    POSTGRES_PASSWORD: str = "atlas_secure_password"
+    # SQLite Configuration (embedded - no external server)
+    DATABASE_PATH: str = "./atlas.db"
     
     @property
     def database_url(self) -> str:
-        """Construct PostgreSQL connection URL."""
-        return (
-            f"postgresql://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}"
-            f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
-        )
+        """Construct SQLite connection URL."""
+        return f"sqlite:///{self.DATABASE_PATH}"
     
-    # Qdrant Configuration (Required - no fallbacks)
-    QDRANT_HOST: str = "localhost"
-    QDRANT_PORT: int = 6333
+    # Qdrant Configuration (embedded - runs in-process via path mode)
+    QDRANT_STORAGE_PATH: str = "./qdrant_storage"
     QDRANT_COLLECTION: str = "atlas_documents"
     
     # Model Storage (for bundled LLM and NER models)
@@ -53,3 +45,4 @@ settings = Settings()
 # Ensure directories exist
 Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
 Path(settings.MODELS_DIR).mkdir(parents=True, exist_ok=True)
+Path(settings.QDRANT_STORAGE_PATH).mkdir(parents=True, exist_ok=True)

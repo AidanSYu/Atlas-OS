@@ -39,9 +39,23 @@ Atlas 2.0 is a **standalone Windows desktop application** that builds a continuo
    - Atlas automatically extracts text, entities, and relationships
    - Query your knowledge base immediately
 
-5. **Ask Questions**:
+5. **Setting up AI models (if the installer did not include them)**  
+   - Open Atlas; in the left sidebar under **Models** you will see the folder path where models should go (e.g. `%LOCALAPPDATA%\Atlas\models` on Windows).
+   - Place the following in that folder:
+     - **LLM:** one or more `.gguf` files (e.g. from Hugging Face).
+     - **Embeddings:** a folder named `nomic-embed-text-v1.5` (sentence-transformers style).
+     - **NER:** a folder named `gliner_small-v2.1` (GLiNER model).
+   - To obtain models: use the download script from the Atlas source repo (see Development) or download compatible LLM/embedding/NER models and place them in the folder structure above. Restart Atlas after adding models.
+
+6. **Ask Questions**:
    - Type natural language questions
    - System returns answers with source citations and relationship context
+
+**If the app says "llama-cpp-python not installed" or "LLM not available"**  
+Do **not** run `pip install` on your computer—that won’t affect the installed app. The installer may not include the LLM runtime. Either run Atlas from source in [development mode](#quick-start-development-mode) (where you can `pip install -r backend/requirements.txt` in a venv), or use a future installer that includes the full backend. Chat and retrieval may still work with a fallback; adding models to the folder in step 5 can help.
+
+**Why does NER (entity parsing) work but the Librarian LLM doesn't?**  
+NER uses GLiNER (Python + PyTorch/ONNX), which the packager bundles reliably. The Librarian uses **llama-cpp-python**, a C++ extension (`.pyd`/DLL). The installer build was not including that native binary correctly, so the LLM import failed even though your GGUF file was found. Rebuilding the backend with the updated spec (see Development & Building) should fix it for future installers.
 
 ---
 
@@ -53,6 +67,17 @@ Atlas 2.0 is a **standalone Windows desktop application** that builds a continuo
 - **Node.js 18+** - https://nodejs.org/
 - **Python 3.12** - https://www.python.org/ (already bundled in releases)
 - **Rust** (optional) - Required only to modify Tauri/desktop components
+
+#### If `pip install -r requirements.txt` backtracks forever (langgraph / langchain-core)
+
+Pip can get stuck trying every version of langgraph when something pins an old langchain-core. Use the **nuke-and-pave + surgical install**:
+
+**Option A – One script (recommended):**
+```powershell
+.\setup-prereqs.ps1
+```
+
+**Option B – Manual steps:** Delete `.venv`, then create a new venv, run `pip install langgraph`, then `pip install -r backend/requirements-no-langgraph.txt`. Then install frontend and root deps as usual.
 
 ### Quick Start: Development Mode
 

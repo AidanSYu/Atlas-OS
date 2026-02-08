@@ -50,6 +50,24 @@ def download_llama_model(models_dir: Path) -> None:
         raise
 
 
+def download_qwen_model(models_dir: Path) -> None:
+    """Download Qwen 2.5 1.5B GGUF model (small/fast)."""
+    print("Downloading Qwen 2.5 1.5B Instruct (Q4_K_M quantization)...")
+    print("This is approximately 1.1GB and is intended for quick testing.")
+
+    try:
+        hf_hub_download(
+            repo_id="Qwen/Qwen2.5-1.5B-Instruct-GGUF",
+            filename="qwen2.5-1.5b-instruct-q4_k_m.gguf",
+            local_dir=models_dir,
+            local_dir_use_symlinks=False
+        )
+        print("Qwen 2.5 1.5B model downloaded successfully!")
+    except Exception as e:
+        print(f"Error downloading Qwen model: {e}")
+        raise
+
+
 def download_embedding_model(models_dir: Path) -> None:
     """Download nomic-embed-text embedding model."""
     print("Downloading nomic-embed-text-v1.5...")
@@ -100,11 +118,14 @@ def main():
     print()
     
     # Check existing models
-    llama_exists = any(models_dir.glob("*.gguf"))
+    llama_exists = any(models_dir.glob("Meta-Llama-3-8B-Instruct*.gguf")) or any(
+        models_dir.glob("llama-3-8b-instruct*.gguf")
+    )
+    qwen_exists = any(models_dir.glob("qwen2.5-1.5b-instruct*.gguf"))
     embed_exists = (models_dir / "nomic-embed-text-v1.5").exists()
     gliner_exists = (models_dir / "gliner_small-v2.1").exists()
     
-    if llama_exists and embed_exists and gliner_exists:
+    if llama_exists and qwen_exists and embed_exists and gliner_exists:
         print("All models already downloaded!")
         print()
         print("To re-download, delete the models directory and run again.")
@@ -117,6 +138,13 @@ def main():
         print()
     else:
         print("Llama model already exists, skipping...")
+
+    if not qwen_exists:
+        print("-" * 60)
+        download_qwen_model(models_dir)
+        print()
+    else:
+        print("Qwen model already exists, skipping...")
     
     if not embed_exists:
         print("-" * 60)
@@ -137,7 +165,7 @@ def main():
     print()
     print(f"Models location: {models_dir}")
     print()
-    print("Total estimated size: ~5GB")
+    print("Total estimated size: ~6.2GB")
     print("=" * 60)
 
 

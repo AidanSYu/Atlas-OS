@@ -1,13 +1,14 @@
-# Python
+﻿# Python
 __pycache__/
 *.py[cod]
-*$py.class
+*.class
 *.so
 .Python
 venv/
 venv_new/
 .venv/
 .venv2/
+.venv
 env/
 ENV/
 .env
@@ -36,6 +37,7 @@ data/neo4j/*
 
 # Environment files
 .env
+.env.local
 
 # IDEs
 .vscode/
@@ -43,6 +45,7 @@ data/neo4j/*
 *.swp
 *.swo
 *~
+.cursor/
 
 # OS
 .DS_Store
@@ -51,6 +54,11 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
 
 # Next.js
 frontend/.next/
@@ -92,15 +100,23 @@ src-tauri/resources/qdrant/
 # PyInstaller build artifacts
 backend/build/
 backend/dist/
-backend/*.spec.bak
+*.spec
+*.spec.bak
 
 # Node modules (root)
 node_modules/
 
-# Build outputs (installers should go to GitHub Releases, not repo)
-*.msi
-*.exe
-*.dmg
-*.app
-*.AppImage
-*.deb
+# Models (too large for git)
+models/
+!models/.gitkeep
+
+# Qdrant storage (local database)
+qdrant_storage/
+
+# Legacy/Test files
+compare_cpu_gpu.py
+test_gpu.py
+build-plugin-librarian.ps1
+
+# Legacy plugins folder (not maintained)
+plugins/

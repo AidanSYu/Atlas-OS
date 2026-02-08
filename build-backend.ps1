@@ -1,5 +1,6 @@
-# Build Atlas backend with PyInstaller and copy to src-tauri/binaries for Tauri sidecar.
+# Build Atlas backend with PyInstaller (onedir) and copy to src-tauri/resources/atlas-backend.
 # Run from repo root. Requires: Python with PyInstaller, backend dependencies installed.
+# Onedir enables fast incremental builds (only changed files replaced).
 #
 # Usage: .\build-backend.ps1 [-Force] [-IncludeModels] [-SkipIfUnchanged]
 # Then: npx tauri build
@@ -13,15 +14,10 @@ param(
 $ErrorActionPreference = "Stop"
 $RepoRoot = $PSScriptRoot
 $BackendDir = Join-Path $RepoRoot "backend"
-$BinariesDir = Join-Path (Join-Path $RepoRoot "src-tauri") "binaries"
+$ResourcesDir = Join-Path (Join-Path $RepoRoot "src-tauri") "resources"
+$BackendResourceDir = Join-Path $ResourcesDir "atlas-backend"
 
-# Tauri sidecar naming: binary-name{-target-triple}{.ext}
-# https://tauri.app/v1/guides/building/sidecar
-$TargetTriples = @{
-    "win32"   = "x86_64-pc-windows-msvc"
-    "darwin"  = "x86_64-apple-darwin"   # Intel Mac; use aarch64-apple-darwin for ARM
-    "linux"   = "x86_64-unknown-linux-gnu"
-}
+# Onedir output: dist/atlas-backend/ containing atlas-backend.exe (Windows) or atlas-backend (Unix)
 $ExeNames = @{
     "win32"   = "atlas-backend.exe"
     "darwin"  = "atlas-backend"
@@ -33,9 +29,8 @@ if ($env:OS -eq "Windows_NT") { $Platform = "win32" }
 elseif ($IsMacOS) { $Platform = "darwin" }
 else { $Platform = "linux" }
 
-$Triple = $TargetTriples[$Platform]
-$SidecarName = "atlas-backend-$Triple"
-if ($Platform -eq "win32") { $SidecarName += ".exe" }
+$DistDir = Join-Path (Join-Path $BackendDir "dist") "atlas-backend"
+$DistExe = Join-Path $DistDir $ExeNames[$Platform]
 
 function Get-LatestWriteTime {
     param([string[]]$Paths)
@@ -53,9 +48,6 @@ function Get-LatestWriteTime {
     return $latest
 }
 
-$DistExe = Join-Path (Join-Path $BackendDir "dist") $ExeNames[$Platform]
-$SidecarDest = Join-Path $BinariesDir $SidecarName
-
 if ($SkipIfUnchanged -and -not $Force -and (Test-Path $DistExe)) {
     $sourceLatest = Get-LatestWriteTime @(
         (Join-Path $BackendDir "app"),
@@ -63,18 +55,20 @@ if ($SkipIfUnchanged -and -not $Force -and (Test-Path $DistExe)) {
         (Join-Path $BackendDir "atlas.spec"),
         (Join-Path $BackendDir "requirements.txt")
     )
-    if ($sourceLatest -and $sourceLatest -le (Get-Item $DistExe).LastWriteTime) {
+    $distLatest = Get-LatestWriteTime @($DistDir)
+    if ($sourceLatest -and $distLatest -and $sourceLatest -le $distLatest) {
         Write-Host "Skipping PyInstaller (backend unchanged)."
-        New-Item -ItemType Directory -Force -Path $BinariesDir | Out-Null
-        Copy-Item -Force $DistExe $SidecarDest
-        Write-Host "Copied to $SidecarDest"
+        New-Item -ItemType Directory -Force -Path $ResourcesDir | Out-Null
+        if (Test-Path $BackendResourceDir) { Remove-Item -Recurse -Force $BackendResourceDir }
+        Copy-Item -Recurse -Force $DistDir $BackendResourceDir
+        Write-Host "Copied to $BackendResourceDir"
         Write-Host "Done. Run: npx tauri build"
         Write-Host ""
         return
     }
 }
 
-Write-Host "Building Atlas backend (PyInstaller onefile) for $Platform ($Triple)..."
+Write-Host "Building Atlas backend (PyInstaller onedir) for $Platform..."
 
 Push-Location $BackendDir
 try {
@@ -104,11 +98,12 @@ try {
 }
 
 if (-not (Test-Path $DistExe)) {
-    Write-Error "Expected exe not found: $DistExe"
+    Write-Error "Expected exe not found: $DistExe (onedir output should be in $DistDir)"
 }
 
-New-Item -ItemType Directory -Force -Path $BinariesDir | Out-Null
-Copy-Item -Force $DistExe $SidecarDest
-Write-Host "Copied to $SidecarDest"
+New-Item -ItemType Directory -Force -Path $ResourcesDir | Out-Null
+if (Test-Path $BackendResourceDir) { Remove-Item -Recurse -Force $BackendResourceDir }
+Copy-Item -Recurse -Force $DistDir $BackendResourceDir
+Write-Host "Copied to $BackendResourceDir"
 Write-Host "Done. Run: npx tauri build"
 Write-Host ""

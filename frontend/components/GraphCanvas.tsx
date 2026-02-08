@@ -10,12 +10,13 @@ const ForceGraph2D = dynamic(() => import('react-force-graph-2d'), { ssr: false 
 interface GraphCanvasProps {
   height: number;
   width: number;
+  projectId?: string;
 }
 
 type NodeData = { id: string; name: string; type: string; color: string; properties?: Record<string, any> };
 type LinkData = { source: string; target: string; label: string };
 
-export default function GraphCanvas({ height, width }: GraphCanvasProps) {
+export default function GraphCanvas({ height, width, projectId }: GraphCanvasProps) {
   const [nodes, setNodes] = useState<NodeData[]>([]);
   const [links, setLinks] = useState<LinkData[]>([]);
   const [loading, setLoading] = useState(true);
@@ -27,7 +28,7 @@ export default function GraphCanvas({ height, width }: GraphCanvasProps) {
     try {
       setLoading(true);
       // Use /graph/full endpoint to get both nodes and edges at once
-      const graphData = await api.getFullGraph();
+      const graphData = await api.getFullGraph(undefined, projectId);
       
       const newNodes: NodeData[] = graphData.nodes.map(e => ({
         id: e.id,
@@ -51,7 +52,7 @@ export default function GraphCanvas({ height, width }: GraphCanvasProps) {
       console.error('Failed to load graph:', error);
       // Fallback to just loading nodes if full graph fails
       try {
-        const ents: EntityInfo[] = await api.listEntities({ limit: 100 });
+        const ents: EntityInfo[] = await api.listEntities({ limit: 100, project_id: projectId });
         const newNodes: NodeData[] = ents.map(e => ({
           id: e.id,
           name: e.name,
@@ -67,7 +68,7 @@ export default function GraphCanvas({ height, width }: GraphCanvasProps) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [projectId]);
 
   useEffect(() => {
     loadGraph();

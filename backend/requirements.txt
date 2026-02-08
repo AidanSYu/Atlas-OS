@@ -3,33 +3,34 @@ fastapi==0.109.0
 uvicorn[standard]==0.27.0
 python-multipart==0.0.6
 
-# Database
-psycopg2-binary==2.9.9
+# Database (SQLite - embedded, no external server)
 sqlalchemy==2.0.25
 
-# Vector Store
+# Vector Store (embedded mode via path=)
 qdrant-client==1.7.0
 
 # LLM & Embeddings (bundled for desktop app)
-llama-cpp-python>=0.2.55
+llama-cpp-python==0.2.83
 sentence-transformers>=2.3.1
 huggingface-hub>=0.20.0
+einops>=0.7.0
 
 # Document Processing
 pypdf==4.0.1
-python-magic-bin==0.4.14; platform_system == "Windows"  # For file type detection on Windows
-python-magic==0.4.27; platform_system != "Windows"
+pdfplumber>=0.10.0
 
 # NER & Entity Extraction
-# Updated for GLiNER v2.1 support
-# Windows long path support may be required: https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation
 gliner>=0.2.7
 transformers>=4.38.2,<5.0.0
 torch==2.5.1
 torchvision==0.20.1
 
+# Agentic RAG - Two-Brain Swarm
+langgraph>=0.2.0
+networkx>=3.2
+
 # Utilities
-pydantic==2.5.3
-pydantic-settings==2.1.0
+pydantic>=2.7.4
+pydantic-settings>=2.1.0
 python-dotenv==1.0.0
 aiofiles==23.2.1

@@ -20,14 +20,6 @@
           {
             "name": "atlas-backend",
             "sidecar": true
-          },
-          {
-            "name": "postgres",
-            "sidecar": true
-          },
-          {
-            "name": "qdrant",
-            "sidecar": true
           }
         ]
       },
@@ -55,7 +47,7 @@
       "deb": {
         "depends": []
       },
-      "externalBin": ["binaries/atlas-backend"],
+      "externalBin": [],
       "icon": [
         "icons/32x32.png",
         "icons/128x128.png",
@@ -76,7 +68,7 @@
         "resources/*"
       ],
       "shortDescription": "AI-Native Knowledge Management",
-      "targets": "all",
+      "targets": ["nsis"],
       "windows": {
         "certificateThumbprint": null,
         "digestAlgorithm": "sha256",
@@ -94,7 +86,7 @@
         "fullscreen": false,
         "height": 900,
         "resizable": true,
-        "title": "Atlas - Knowledge Management",
+        "title": "Atlas - Agentic RAG Knowledge Engine",
         "width": 1400,
         "minWidth": 800,
         "minHeight": 600,

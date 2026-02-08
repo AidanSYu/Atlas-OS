@@ -30,13 +30,8 @@ def get_resource_path(relative_path: str) -> Path:
 
 def setup_environment():
     """Set up environment variables for bundled app."""
-    # Set MODELS_DIR to bundled models location
     if hasattr(sys, '_MEIPASS'):
-        models_dir = get_resource_path('models')
-        os.environ.setdefault('MODELS_DIR', str(models_dir))
-        logger.info(f"Using bundled models from: {models_dir}")
-        
-        # Set upload directory to user's app data
+        # Bundled: use user AppData so users can add models without touching Program Files
         if sys.platform == 'win32':
             app_data = Path(os.environ.get('LOCALAPPDATA', '')) / 'Atlas'
         elif sys.platform == 'darwin':
@@ -45,10 +40,32 @@ def setup_environment():
             app_data = Path.home() / '.atlas'
         
         app_data.mkdir(parents=True, exist_ok=True)
+        models_dir = app_data / 'models'
+        models_dir.mkdir(parents=True, exist_ok=True)
+        os.environ.setdefault('MODELS_DIR', str(models_dir))
+        logger.info(f"Using models from: {models_dir}")
+        
+        # Set upload directory to user's app data
         upload_dir = app_data / 'uploads'
         upload_dir.mkdir(parents=True, exist_ok=True)
         os.environ.setdefault('UPLOAD_DIR', str(upload_dir))
         logger.info(f"Using upload directory: {upload_dir}")
+        
+        # SQLite database (embedded)
+        db_path = app_data / 'atlas.db'
+        os.environ.setdefault('DATABASE_PATH', str(db_path))
+        logger.info(f"Using database: {db_path}")
+        
+        # Qdrant storage (embedded, in-process)
+        qdrant_dir = app_data / 'qdrant_storage'
+        qdrant_dir.mkdir(parents=True, exist_ok=True)
+        os.environ.setdefault('QDRANT_STORAGE_PATH', str(qdrant_dir))
+        logger.info(f"Using Qdrant storage: {qdrant_dir}")
+    else:
+        # Dev: models live in repo root (parent of backend/)
+        dev_models = Path(__file__).resolve().parent.parent / "models"
+        os.environ.setdefault("MODELS_DIR", str(dev_models))
+        logger.info(f"Using dev models from: {dev_models}")
 
 
 def main():
