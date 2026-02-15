@@ -1,8 +1,8 @@
 {
   "scripts": {
-    "build": "cd frontend && npm run build",
-    "dev": "cd frontend && npm run dev",
-    "build:backend": "powershell -ExecutionPolicy Bypass -File ./build-backend.ps1 -SkipIfUnchanged",
+    "build": "cd src/frontend && npm run build",
+    "dev": "cd src/frontend && npm run dev",
+    "build:backend": "powershell -ExecutionPolicy Bypass -File ./scripts/build/build-backend.ps1 -SkipIfUnchanged",
     "tauri:dev": "npx tauri dev --no-watch",
     "tauri:build": "npm run build:backend && npx tauri build"
   },

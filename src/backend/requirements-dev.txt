@@ -1,0 +1,7 @@
+pytest
+pytest-asyncio
+httpx
+bandit
+mypy
+mcp[cli]
+aider-chat

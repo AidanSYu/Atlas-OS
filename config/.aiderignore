@@ -1,0 +1,7 @@
+frontend/node_modules
+src-tauri/target
+backend/__pycache__
+backend/venv
+qdrant_storage
+*.lock
+*.pdf

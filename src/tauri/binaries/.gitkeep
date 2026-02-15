@@ -1,0 +1,5 @@
+# Built sidecar binaries go here:
+#   atlas-backend-x86_64-pc-windows-msvc.exe (Windows)
+#   atlas-backend-x86_64-apple-darwin (macOS)
+#   atlas-backend-x86_64-unknown-linux-gnu (Linux)
+# Run ..\..\build-backend.ps1 (or build-backend.sh) from repo root to build.

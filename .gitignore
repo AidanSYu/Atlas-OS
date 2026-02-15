@@ -1,127 +1,60 @@
-﻿# Python
-__pycache__/
-*.py[cod]
-*.class
-*.so
-.Python
-venv/
-venv_new/
-.venv/
-.venv2/
-.venv
-env/
-ENV/
+﻿# ===========================
+# Project Atlas .gitignore
+# ===========================
+
+# --- Secrets & Environment ---
 .env
-pip-log.txt
-pip-delete-this-directory.txt
-.tox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-.hypothesis/
-.pytest_cache/
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+tools/keys/*
+
+# --- Dependencies ---
+node_modules/
+__pycache__/
+.venv/
+env/
+venv/
 *.egg-info/
+
+# --- Build Artifacts ---
 dist/
 build/
+out/
+.next/
+src-tauri/target/
+src/tauri/target/
 
-# Data directories
-data/uploads/*
-!data/uploads/.gitkeep
-data/chromadb/*
-!data/chromadb/.gitkeep
-data/neo4j/*
-!data/neo4j/.gitkeep
-
-# Environment files
-.env
-.env.local
-
-# IDEs
+# --- IDE & System ---
 .vscode/
 .idea/
-*.swp
-*.swo
-*~
-.cursor/
-
-# OS
 .DS_Store
 Thumbs.db
-
-# Logs
 *.log
-logs/
+*.tmp
 
-# Database files
+# --- Aider / AI Tools ---
+.aider*
+!.aider.conf.yml
+!.aiderignore
+
+# --- Database ---
 *.db
 *.sqlite
 *.sqlite3
-
-# Next.js
-frontend/.next/
-frontend/out/
-frontend/build/
-frontend/dist/
-
-# Node
-frontend/node_modules/
-frontend/.pnp
-frontend/.pnp.js
-
-# Testing
-frontend/.coverage
-frontend/coverage/
-
-# Misc
-frontend/.DS_Store
-frontend/*.pem
-
-# Debug
-frontend/npm-debug.log*
-frontend/yarn-debug.log*
-frontend/yarn-error.log*
-
-# Local env files
-frontend/.env*.local
-
-# Vercel
-frontend/.vercel
-
-# Tauri / Rust
-src-tauri/target/
-src-tauri/binaries/*.exe
-src-tauri/binaries/*.dll
-src-tauri/resources/postgres/
-src-tauri/resources/qdrant/
-src-tauri/target/
-src-tauri/binaries/
-src-tauri/resources/qdrant/
-src-tauri/resources/atlas-backend/
-src-tauri/target/release/bundle/
-
-# PyInstaller build artifacts
-backend/build/
-backend/dist/
-*.spec
-*.spec.bak
-
-# Node modules (root)
-node_modules/
-
-# Models (too large for git)
-models/
-!models/.gitkeep
-
-# Qdrant storage (local database)
+data/
 qdrant_storage/
 
-# Legacy/Test files
-compare_cpu_gpu.py
-test_gpu.py
-build-plugin-librarian.ps1
+# --- Installers (Whitelisted) ---
+# Ignore all executables by default...
+*.exe
+*.msi
+*.dmg
+*.app
 
-# Legacy plugins folder (not maintained)
-plugins/
+# ...but allow them in the installers folder for distribution
+!installers/*.exe
+!installers/*.msi
+!installers/*.dmg

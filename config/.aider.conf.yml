@@ -1,0 +1,5 @@
+model: deepseek/deepseek-reasoner
+test-cmd: ./tools/test.sh
+auto-test: true
+map-tokens: 1024
+stream: false

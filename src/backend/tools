@@ -1,0 +1,66 @@
+from fastmcp import FastMCP
+import sqlite3
+import httpx
+import os
+
+# Configuration
+DB_PATH = os.path.abspath("backend/atlas.db")
+API_URL = "http://127.0.0.1:8000"
+
+mcp = FastMCP("Atlas Control")
+
+@mcp.tool()
+def inspect_schema():
+    """Returns SQLite table names and columns."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+    tables = cursor.fetchall()
+    schema = {}
+    for table_name in tables:
+        table_name = table_name[0]
+        cursor.execute(f"PRAGMA table_info({table_name});")
+        columns = cursor.fetchall()
+        schema[table_name] = [col[1] for col in columns]
+    conn.close()
+    return schema
+
+@mcp.tool()
+def run_sql_query(query: str):
+    """Executes READ-ONLY queries (block DROP/DELETE)."""
+    if "DROP" in query.upper() or "DELETE" in query.upper():
+        return "Error: DROP and DELETE queries are not allowed."
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query)
+        results = cursor.fetchall()
+        return results
+    except Exception as e:
+        return str(e)
+    finally:
+        conn.close()
+
+@mcp.tool()
+async def check_backend_health():
+    """Pings the FastAPI root."""
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(API_URL)
+            return {"status": response.status_code, "content": response.text}
+        except httpx.RequestError as exc:
+            return f"An error occurred while requesting {exc.request.url!r}."
+
+@mcp.tool()
+async def trigger_swarm_agent(query: str, mode: str):
+    """POSTs to the running API's chat endpoint."""
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(f"{API_URL}/chat", json={"query": query, "mode": mode})
+            return response.json()
+        except httpx.RequestError as exc:
+             return f"An error occurred while requesting {exc.request.url!r}."
+
+if __name__ == "__main__":
+    mcp.run()
