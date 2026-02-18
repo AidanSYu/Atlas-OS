@@ -1,5 +1,9 @@
 # Atlas 2.0 - AI-Native Knowledge Desktop Application
 
+.\scripts\dev\run_backend.ps1
+npx tauri dev
+
+
 > **The AI does not know things. It queries a living knowledge substrate.**
 
 Atlas 2.0 is a **standalone Windows desktop application** that builds a continuous knowledge layer beneath an AI model. This is not a chatbot—it's a scalable, explainable, open-source knowledge substrate optimized for retrieval, relationships, and reasoning over your personal documents.
@@ -74,13 +78,16 @@ Pip can get stuck trying every version of langgraph when something pins an old l
 
 **Option A – One script (recommended):**
 ```powershell
-.\setup-prereqs.ps1
+.\scripts\setup\setup_project.ps1
 ```
 
-**Option B – Manual steps:** Delete `.venv`, then create a new venv, run `pip install langgraph`, then `pip install -r backend/requirements-no-langgraph.txt`. Then install frontend and root deps as usual.
+**Option B – Manual steps:** Delete `.venv`, then create a new venv, run `pip install langgraph`, then `pip install -r src/backend/requirements.txt`. Then install frontend and root deps as usual.
 
 ### Quick Start: Development Mode
 
+**In two terminals:** (1) **Frontend / desktop:** `npm run tauri:dev` or `npx tauri dev` from repo root. (2) **Backend:** `.\scripts\dev\run_backend.ps1` from repo root, or `python run_server.py` from `src/backend` with venv activated.
+
+#### Option 1: Run Everything (Backend + Frontend + Desktop App)
 ```powershell
 # Clone the repository
 git clone https://github.com/[your-repo]/atlas.git
@@ -89,16 +96,42 @@ cd atlas
 # Install dependencies
 npm install
 
-# Run development server (all components in one window)
+# Run development server
 npm run tauri:dev
 ```
 
-This launches:
-- ✅ Backend (FastAPI) on `http://localhost:8000`
-- ✅ PostgreSQL (bundled executable)
-- ✅ Qdrant (bundled executable)
+#### Option 2: Run Separately (Recommended for Hot-Reloading)
+For faster development with hot-reloading, run the backend and frontend in separate terminals.
+
+**Terminal 1 (Backend):**  
+Install dependencies first if you haven’t: from repo root run `.\scripts\setup\setup_project.ps1` (creates root `.venv` and installs backend deps). Then either:
+
+**Option A – from repo root (recommended):**
+```powershell
+.\scripts\dev\run_backend.ps1
+```
+
+**Option B – from backend folder:**
+```powershell
+.\.venv\Scripts\Activate.ps1
+cd src/backend
+python run_server.py
+```
+- API: http://127.0.0.1:8000 — Docs: http://127.0.0.1:8000/docs  
+- `run_server.py` is the backend entry point (same one used when bundled). For hot-reload during development you can use `python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000` instead.  
+- If you see `ModuleNotFoundError` (e.g. `async_lru`), the backend venv/deps are not active; run `setup_project.ps1` or `pip install -r requirements.txt` from `src/backend` with your venv activated.
+
+**Terminal 2 (Frontend):**
+```powershell
+cd src/frontend
+npm run dev
+```
+- Frontend: http://localhost:3000
+
+This gives you:
+- ✅ Backend (FastAPI) on `http://127.0.0.1:8000` (SQLite + embedded Qdrant in-process)
 - ✅ Frontend (Next.js) on `http://localhost:3000`
-- ✅ Desktop window with embedded web view
+- Open the Tauri desktop window separately with `npm run tauri:dev` from the repo root if you want the full app shell
 
 **Note:** Only works on Windows; Linux/Mac support coming with Tauri 2.0
 
@@ -110,8 +143,8 @@ npm run tauri:build
 ```
 
 This creates:
-- `src-tauri/target/release/Atlas_2.0.0_x64_en-US.msi` - Windows Installer
-- `src-tauri/target/release/Atlas_2.0.0_x64-setup.exe` - Alternative installer
+- `src/tauri/target/release/Atlas_2.0.0_x64_en-US.msi` - Windows Installer
+- `src/tauri/target/release/Atlas_2.0.0_x64-setup.exe` - Alternative installer
 - ~2.8GB total size (includes all dependencies and models)
 
 ---
@@ -193,7 +226,7 @@ Source-Cited Answer + Explanations
 
 ### Desktop Container (Rust/Tauri)
 
-**`src-tauri/src/main.rs`** - Tauri orchestration:
+**`src/tauri/src/main.rs`** - Tauri orchestration:
 - Starts PostgreSQL + Qdrant sidecars on app launch
 - Routes desktop window ↔ FastAPI backend
 - Manages process lifecycle (cleanup on exit)
@@ -302,7 +335,7 @@ npm run type-check           # TypeScript check
 
 **Database Issues:**
 - PostgreSQL log: `data/postgres/postgresql.log`
-- Qdrant log: `src-tauri/resources/qdrant.log`
+- Qdrant log: `src/tauri/resources/qdrant.log`
 
 ---
 
@@ -312,7 +345,7 @@ npm run type-check           # TypeScript check
 
 **Q: "Backend server did not start"**
 - A: Check if port 8000 is in use: `netstat -ano | findstr :8000`
-- Kill the process or change port in `src-tauri/src/main.rs`
+- Kill the process or change port in `src/tauri/src/main.rs`
 
 **Q: "Database connection refused"**
 - A: PostgreSQL executable failed to start
@@ -320,7 +353,7 @@ npm run type-check           # TypeScript check
 - Delete `data/postgres/` and restart (recreates fresh database)
 
 **Q: "Qdrant connection refused"**
-- A: Similarly, delete `src-tauri/resources/qdrant/` and restart
+- A: Similarly, delete `src/tauri/resources/qdrant/` and restart
 
 **Q: "Windows Defender blocks the app"**
 - A: This is normal for new unsigned apps

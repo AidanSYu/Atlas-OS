@@ -37,6 +37,10 @@ app.add_middleware(
     allow_headers=["Content-Type", "Authorization"],
 )
 
+# GZip Compression - optimized for large JSON responses (Graph data)
+from fastapi.middleware.gzip import GZipMiddleware
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
 
 # Global error handler
 @app.exception_handler(Exception)

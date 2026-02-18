@@ -37,6 +37,9 @@ from app.core.database import get_session, Node, Edge, Document, DocumentChunk
 from app.core.config import settings
 from app.services.llm import LLMService
 from app.core.qdrant_store import get_qdrant_client
+from app.services.docling_parser import DoclingParser
+from app.services.semantic_chunker import SemanticChunker
+from app.services.raptor import RaptorService
 from qdrant_client.models import Distance, VectorParams, PointStruct
 from datetime import datetime
 import hashlib
@@ -64,6 +67,25 @@ class IngestionService:
             raise RuntimeError(
                 "GLiNER model is required for ingestion. Fix the model install/config and retry."
             )
+
+        # Phase B2: Docling VLM parser (lazy-loaded, optional)
+        self.docling_parser = None
+        if settings.USE_DOCLING and DoclingParser.is_available():
+            self.docling_parser = DoclingParser.get_instance()
+            logger.info("Docling VLM parser enabled")
+
+        # Phase B3: Semantic chunker (optional)
+        self.semantic_chunker = None
+        if settings.USE_SEMANTIC_CHUNKING and SemanticChunker.is_available():
+            self.semantic_chunker = SemanticChunker(max_tokens=settings.SEMANTIC_CHUNK_TOKENS)
+            logger.info("Semantic chunker enabled")
+
+        # Phase B4: RAPTOR hierarchy builder (optional)
+        self.raptor = None
+        if settings.USE_RAPTOR and RaptorService.is_available():
+            self.raptor = RaptorService(self.llm_service)
+            logger.info("RAPTOR hierarchy builder enabled")
+
         logger.info("IngestionService initialized (embedded Qdrant + SQLite)")
 
     def _load_gliner_model(self):
@@ -261,17 +283,65 @@ class IngestionService:
                 chunks, doc_id, node_ids_by_chunk, document, session
             )
 
-            if vector_points:
+            # 7.5: Build RAPTOR hierarchy (Phase B4)
+            raptor_points = []
+            if self.raptor and vector_points and len(vector_points) >= 3:
+                try:
+                    embeddings = [point.vector for point in vector_points]
+                    hierarchy = await self.raptor.build_hierarchy(
+                        chunks=chunks,
+                        embeddings=embeddings,
+                        doc_id=doc_id,
+                        filename=filename,
+                        n_clusters=min(settings.RAPTOR_CLUSTERS, len(chunks) // 3),
+                    )
+
+                    # Store L1 cluster summaries in Qdrant
+                    for summary in hierarchy.get("L1", []):
+                        if not summary.get("text") or not summary.get("embedding"):
+                            continue
+                        raptor_points.append(PointStruct(
+                            id=str(uuid.uuid4()),
+                            vector=summary["embedding"],
+                            payload={
+                                "chunk_id": str(uuid.uuid4()),
+                                "doc_id": doc_id,
+                                "text": summary["text"],
+                                "metadata": summary["metadata"],
+                            },
+                        ))
+
+                    # Store L2 document summary in Qdrant
+                    l2 = hierarchy.get("L2")
+                    if l2 and l2.get("text") and l2.get("embedding"):
+                        raptor_points.append(PointStruct(
+                            id=str(uuid.uuid4()),
+                            vector=l2["embedding"],
+                            payload={
+                                "chunk_id": str(uuid.uuid4()),
+                                "doc_id": doc_id,
+                                "text": l2["text"],
+                                "metadata": l2["metadata"],
+                            },
+                        ))
+
+                    logger.info(f"RAPTOR: {len(raptor_points)} hierarchy vectors generated")
+                except Exception as e:
+                    logger.warning(f"RAPTOR hierarchy build failed (non-fatal): {e}")
+
+            # 8. Upload all vectors to Qdrant (L0 chunks + RAPTOR L1/L2)
+            all_points = vector_points + raptor_points
+            if all_points:
                 loop = asyncio.get_event_loop()
                 await loop.run_in_executor(
                     self.executor,
                     lambda: self.qdrant_client.upsert(
-                        collection_name=self.collection_name, points=vector_points
+                        collection_name=self.collection_name, points=all_points
                     ),
                 )
-                logger.info(f"Uploaded {len(vector_points)} vectors to Qdrant")
+                logger.info(f"Uploaded {len(all_points)} vectors to Qdrant ({len(vector_points)} chunks + {len(raptor_points)} RAPTOR)")
 
-            # 8. Mark as completed
+            # 9. Mark as completed
             document.status = "completed"
             document.processed_at = datetime.utcnow()
             document.processed_chunks = document.total_chunks
@@ -348,7 +418,27 @@ class IngestionService:
     # ----------------------------------------------------------------
 
     async def _extract_pdf_text(self, file_path: str) -> List[Dict[str, Any]]:
-        """Extract text from PDF with page numbers (async)."""
+        """Extract text from PDF with page numbers (async).
+
+        Phase B2: Tries Docling VLM parser first for structure-preserving
+        extraction (tables, charts), falls back to pdfplumber/PyPDF.
+        """
+        # Phase B2: Try Docling first (preserves tables and structure)
+        if self.docling_parser:
+            try:
+                loop = asyncio.get_event_loop()
+                pages = await loop.run_in_executor(
+                    self.executor,
+                    self.docling_parser.parse_document,
+                    file_path,
+                )
+                if pages:
+                    logger.info(f"Docling extracted {len(pages)} pages")
+                    return pages
+            except Exception as e:
+                logger.warning(f"Docling failed, falling back to pdfplumber: {e}")
+
+        # Fallback: pdfplumber / PyPDF
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(self.executor, self._extract_pdf_text_sync, file_path)
 
@@ -462,7 +552,26 @@ class IngestionService:
     def _chunk_document(
         self, pages: List[Dict[str, Any]], doc_id: str, filename: str
     ) -> List[Dict[str, Any]]:
-        """Chunk document into overlapping segments."""
+        """Chunk document using semantic or fixed-size strategy.
+
+        Phase B3: Uses semantic chunker if available, otherwise falls back
+        to the original fixed-size overlap chunking.
+        """
+        if self.semantic_chunker:
+            try:
+                chunks = self.semantic_chunker.chunk_pages(pages, doc_id, filename)
+                if chunks:
+                    logger.info(f"Semantic chunking produced {len(chunks)} chunks")
+                    return chunks
+            except Exception as e:
+                logger.warning(f"Semantic chunking failed, falling back to fixed-size: {e}")
+
+        return self._chunk_document_fixed_size(pages, doc_id, filename)
+
+    def _chunk_document_fixed_size(
+        self, pages: List[Dict[str, Any]], doc_id: str, filename: str
+    ) -> List[Dict[str, Any]]:
+        """Original fixed-size chunking with overlap (fallback)."""
         chunks = []
         chunk_index = 0
 

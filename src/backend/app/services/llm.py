@@ -356,20 +356,31 @@ class LLMService:
         else:
              self._model_type = "llama"
         
-        # Verify actual GPU availability using torch (since we rely on system CUDA)
-        # This prevents the UI from showing "GPU" just because we REQUESTED layers
+        # Prefer llama_cpp's own GPU detection: it reflects whether THIS backend was
+        # built with CUDA and can use the GPU. Do NOT use torch.cuda.is_available():
+        # requirements.txt installs CPU-only PyTorch by default, so torch would report
+        # False even when llama-cpp-python is using the GPU.
+        has_cuda = False
         try:
-            import torch
-            has_cuda = torch.cuda.is_available()
-        except ImportError:
-            has_cuda = False
+            from llama_cpp.llama_cpp import llama_supports_gpu_offload
+            has_cuda = bool(llama_supports_gpu_offload())
+        except (ImportError, AttributeError, Exception):
+            try:
+                import torch
+                has_cuda = torch.cuda.is_available()
+            except ImportError:
+                pass
 
         if self._gpu_layers > 0 and has_cuda:
             self._device = "gpu"
         else:
             self._device = "cpu"
             if self._gpu_layers > 0:
-                logger.warning("GPU layers requested but CUDA not available/detected. Reporting CPU.")
+                logger.warning(
+                    "GPU layers requested but CUDA not available/detected. "
+                    "Install llama-cpp-python with CUDA (e.g. pip install llama-cpp-python "
+                    "--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu121). Reporting CPU."
+                )
 
         logger.info(f"LLM loaded successfully: {self._active_model_name}")
         logger.info(f"Model type: {self._model_type}, Device: {self._device}")

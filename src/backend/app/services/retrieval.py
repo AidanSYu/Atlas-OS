@@ -21,6 +21,7 @@ from app.core.database import get_session, Node, Edge, Document
 from app.core.config import settings
 from app.services.llm import LLMService
 from app.core.qdrant_store import get_qdrant_client
+from app.services.rerank import get_rerank_service
 from qdrant_client.models import Filter, FieldCondition, MatchValue
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,7 @@ class RetrievalService:
         # Embedded Qdrant - shared singleton
         self.qdrant_client = get_qdrant_client()
         self.collection_name = settings.QDRANT_COLLECTION
+        self.reranker = get_rerank_service()
         logger.info("RetrievalService initialized (embedded Qdrant)")
 
     async def _embed_text(self, text: str) -> List[float]:
@@ -122,11 +124,11 @@ If no dates/entities found, return empty arrays."""
             loop = asyncio.get_running_loop()
 
             def _qdrant_search():
-                return self.qdrant_client.search(
+                return self.qdrant_client.query_points(
                     collection_name=self.collection_name,
-                    query_vector=query_embedding,
+                    query=query_embedding,
                     limit=20,
-                )
+                ).points
 
             vector_results = await loop.run_in_executor(None, _qdrant_search)
             vector_results = [
@@ -259,7 +261,22 @@ If no dates/entities found, return empty arrays."""
                         all_chunks[chunk_id]["relevance_score"], 0.98
                     )
 
-            vector_chunks = sorted(all_chunks.values(), key=lambda x: x["relevance_score"], reverse=True)[:10]
+            candidate_chunks = sorted(all_chunks.values(), key=lambda x: x["relevance_score"], reverse=True)[:20]
+
+            # Step 4.5: Reranking (Phase B1) - Cross-encoder precision scoring
+            if settings.ENABLE_RERANKING and len(candidate_chunks) > 0:
+                try:
+                    vector_chunks = await self.reranker.rerank(
+                        query=user_question,
+                        documents=candidate_chunks,
+                        top_n=settings.RERANK_TOP_N,
+                    )
+                    logger.info(f"Reranked {len(candidate_chunks)} chunks -> top {len(vector_chunks)}")
+                except Exception as e:
+                    logger.warning(f"Reranking failed, using original ordering: {e}")
+                    vector_chunks = candidate_chunks[:10]
+            else:
+                vector_chunks = candidate_chunks[:10]
 
             # Step 5: Graph Expansion - 1-hop neighborhood
             node_ids_from_chunks: set = set()

@@ -63,6 +63,22 @@ class Settings(BaseSettings):
     ENABLE_OUTPUT_VALIDATION: bool = True  # Enable structured output validation with retries
     MAX_VALIDATION_RETRIES: int = 2        # Max retries for malformed LLM outputs
 
+    # RAG Optimization Configuration (Phase B)
+    ENABLE_RERANKING: bool = True          # Enable FlashRank reranking
+    RERANK_TOP_N: int = 5                  # Number of chunks to keep after reranking
+    GRAPH_CACHE_TTL: int = 300             # Cache duration for graph queries (seconds)
+
+    # Phase B2: Document Parsing
+    USE_DOCLING: bool = True               # Enable Docling VLM parsing (fallback: pdfplumber)
+
+    # Phase B3: Semantic Chunking
+    USE_SEMANTIC_CHUNKING: bool = True     # Enable semantic chunking (fallback: fixed-size)
+    SEMANTIC_CHUNK_TOKENS: int = 512       # Target tokens per semantic chunk
+
+    # Phase B4: RAPTOR Hierarchical Summarization
+    USE_RAPTOR: bool = True                # Enable RAPTOR hierarchy on ingestion
+    RAPTOR_CLUSTERS: int = 5              # Number of L1 clusters per document
+
 
 settings = Settings()
 

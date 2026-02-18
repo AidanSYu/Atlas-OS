@@ -6,6 +6,8 @@ from sqlalchemy import func
 from app.core.database import get_session, Node, Edge
 
 import networkx as nx
+import asyncio
+from async_lru import alru_cache
 
 
 class GraphService:
@@ -90,7 +92,7 @@ class GraphService:
         project_id: Optional[str] = None,
         limit: int = 500,
     ) -> Dict[str, Any]:
-        """Get all nodes and edges for a complete graph view."""
+        """Get all nodes and edges for a complete graph view (Synchronous)."""
         from app.core.database import Document
 
         session = get_session()
@@ -125,7 +127,26 @@ class GraphService:
         finally:
             session.close()
 
-    def get_networkx_subgraph(
+    @alru_cache(maxsize=32, ttl=300)
+    async def get_full_graph_cached(
+        self,
+        document_id: Optional[str] = None,
+        project_id: Optional[str] = None,
+        limit: int = 500,
+    ) -> Dict[str, Any]:
+        """Async cached wrapper for UI graph loading."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, 
+            lambda: self.get_full_graph(
+                document_id=document_id, 
+                project_id=project_id, 
+                limit=limit
+            )
+        )
+
+    @alru_cache(maxsize=32, ttl=300)  # Caching for 5 minutes (TTL from config is better)
+    async def get_networkx_subgraph(
         self,
         document_id: Optional[str] = None,
         project_id: Optional[str] = None,
@@ -135,10 +156,22 @@ class GraphService:
 
         This is used by the Navigator brain in the swarm for graph traversal,
         community detection, and path-finding algorithms.
+        CACHED: Rebuilding the graph from SQL is expensive.
         """
-        graph_data = self.get_full_graph(
-            document_id=document_id, project_id=project_id, limit=limit
-        )
+        # Note: 'self' is part of the cache key, so if GraphService is recreated, cache is lost.
+        # This is fine for a per-request lifecycle, but for global caching, 
+        # GraphService should be a singleton or we use a static cache.
+        # Here we assume GraphService is long-lived or we accept short-lived caching.
+        
+        # We need to run the sync DB query in a thread to be async-friendly for alru_cache
+        loop = asyncio.get_running_loop()
+        
+        def _fetch_data():
+             return self.get_full_graph(
+                document_id=document_id, project_id=project_id, limit=limit
+            )
+            
+        graph_data = await loop.run_in_executor(None, _fetch_data)
 
         G = nx.DiGraph()
         for node in graph_data["nodes"]:
@@ -159,6 +192,14 @@ class GraphService:
             )
 
         return G
+
+    def invalidate_cache(self):
+        """Clear all cached graph data. Call after ingestion completes."""
+        try:
+            self.get_full_graph_cached.cache_clear()
+            self.get_networkx_subgraph.cache_clear()
+        except Exception:
+            pass
 
     def _node_to_dict(self, node: Node) -> Dict[str, Any]:
         """Convert Node ORM object to dictionary."""

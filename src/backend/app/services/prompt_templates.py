@@ -591,17 +591,47 @@ def validate_xml_output(response: str, required_tags: list[str]) -> bool:
     Returns:
         True if all required tags are present and properly closed
     """
+    import re
+    # 1. Strip markdown code blocks if present
+    # Remove ```xml ... ``` or similar
+    text_to_check = response
+    code_block_match = re.search(r"```(?:\w+)?\s*(.*?)```", response, re.DOTALL)
+    if code_block_match:
+        text_to_check = code_block_match.group(1)
+
     for tag in required_tags:
-        opening = f"<{tag}>"
-        closing = f"</{tag}>"
-        if opening not in response or closing not in response:
+        # Regex to match <tag ...>content</tag>
+        # Handles attributes: <tag type="foo">
+        # Handles case-insensitivity: <Tag>...</Tag>
+        # Handles whitespace: < tag >
+        
+        # We need to find both opening and closing tags in the correct order
+        # Pattern: <tag[^>]*> .*? </tag>
+        # We use re.IGNORECASE for case-insensitivity
+        
+        # Simple check for existence of opening and closing tags
+        # Note: This doesn't strictly enforce nesting, just presence
+        
+        opening_pattern = f"<{tag}\\b[^>]*>"
+        closing_pattern = f"</{tag}\\s*>"
+        
+        open_match = re.search(opening_pattern, text_to_check, re.IGNORECASE)
+        close_match = re.search(closing_pattern, text_to_check, re.IGNORECASE)
+        
+        if not open_match or not close_match:
             return False
         
-        # Check that opening comes before closing
-        open_idx = response.find(opening)
-        close_idx = response.find(closing)
-        if open_idx >= close_idx:
-            return False
+        # Check order: closing must be after opening
+        if open_match.start() >= close_match.start():
+            # Try to find a closing tag after the opening tag
+            close_matches = list(re.finditer(closing_pattern, text_to_check, re.IGNORECASE))
+            found_valid_pair = False
+            for cm in close_matches:
+                if cm.start() > open_match.start():
+                    found_valid_pair = True
+                    break
+            if not found_valid_pair:
+                return False
     
     return True
 
@@ -639,15 +669,21 @@ def validate_json_output(response: str, required_keys: list[str]) -> bool:
 
 
 def validate_reasoner_output(response: str) -> bool:
-    """Validate Navigator/Cortex reasoner output format."""
-    required_tags = ["thinking", "hypothesis", "confidence"]
-    return validate_xml_output(response, required_tags)
+    """Validate Navigator/Cortex reasoner output format.
+
+    Only requires <hypothesis> tag — small LLMs often omit <thinking>
+    and <confidence>. extract_xml_tag handles missing tags gracefully.
+    """
+    return validate_xml_output(response, ["hypothesis"])
 
 
 def validate_executor_output(response: str) -> bool:
-    """Validate Cortex executor output format."""
-    required_tags = ["thinking", "answer", "confidence"]
-    return validate_xml_output(response, required_tags)
+    """Validate Cortex executor output format.
+
+    Only requires <answer> tag — small LLMs often omit <thinking> and
+    <confidence> tags. extract_xml_tag handles missing tags gracefully.
+    """
+    return validate_xml_output(response, ["answer"])
 
 
 def validate_planner_output(response: str) -> bool:
@@ -657,21 +693,27 @@ def validate_planner_output(response: str) -> bool:
 
 
 def validate_decomposer_output(response: str) -> bool:
-    """Validate Cortex decomposer output format."""
-    required_keys = ["aspects", "sub_tasks", "coverage_check"]
-    return validate_json_output(response, required_keys)
+    """Validate Cortex decomposer output format.
+
+    Only requires 'sub_tasks' — the essential decomposition result.
+    """
+    return validate_json_output(response, ["sub_tasks"])
 
 
 def validate_critic_output(response: str) -> bool:
-    """Validate Navigator critic output format."""
-    required_keys = ["verdict", "issues_found", "missing_aspects", "contradictions"]
-    return validate_json_output(response, required_keys)
+    """Validate Navigator critic output format.
+
+    Only requires 'verdict' — the essential routing decision.
+    """
+    return validate_json_output(response, ["verdict"])
 
 
 def validate_cross_checker_output(response: str) -> bool:
-    """Validate Cortex cross-checker output format."""
-    required_keys = ["contradictions", "coverage_gaps", "overall_verdict"]
-    return validate_json_output(response, required_keys)
+    """Validate Cortex cross-checker output format.
+
+    Only requires 'overall_verdict' — the essential routing decision.
+    """
+    return validate_json_output(response, ["overall_verdict"])
 
 
 def validate_resolver_output(response: str) -> bool:

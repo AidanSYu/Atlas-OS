@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import FileSidebar from '@/components/FileSidebar';
@@ -9,6 +9,7 @@ import KnowledgeGraph from '@/components/KnowledgeGraph';
 import ChatInterface from '@/components/ChatInterface';
 import { api, ModelStatusResponse, ProjectInfo } from '@/lib/api';
 import { useChatStore } from '@/stores/chatStore';
+import { useGraphStore } from '@/stores/graphStore';
 import {
   FileText,
   ChevronLeft,
@@ -33,6 +34,7 @@ export default function ProjectWorkspacePage() {
   const projectId = decodeURIComponent(params.id || '');
 
   const { setActiveProject } = useChatStore();
+  const { refreshGraph } = useGraphStore();
 
   const [currentProject, setCurrentProject] = useState<ProjectInfo | null>(null);
   const [loading, setLoading] = useState(true);
@@ -157,6 +159,10 @@ export default function ProjectWorkspacePage() {
     }
   };
 
+  const handleIngestionComplete = useCallback(() => {
+    refreshGraph();
+  }, [refreshGraph]);
+
   const handleFileSelect = (docId: string, filename: string) => {
     setSelectedDocId(docId);
     setSelectedFilename(filename);
@@ -250,6 +256,7 @@ export default function ProjectWorkspacePage() {
                 onFileSelect={handleFileSelect}
                 selectedDocId={selectedDocId}
                 projectId={currentProject.id}
+                onIngestionComplete={handleIngestionComplete}
               />
             </div>
             <div className="border-t border-border px-3 py-3">
@@ -273,7 +280,7 @@ export default function ProjectWorkspacePage() {
         <PanelResizeHandle className="w-px bg-border" />
 
         <Panel defaultSize={56} minSize={35}>
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
+          <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
             <div className="flex shrink-0 border-b border-border bg-card px-3 py-2">
               <div className="inline-flex border border-border bg-surface">
                 <button

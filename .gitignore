@@ -1,5 +1,16 @@
-﻿# ===========================
-# Project Atlas .gitignore
+﻿# Project Atlas .gitignore
+# ===========================
+
+# --- Large AI Models & Data ---
+/models/
+models/*.gguf
+models/*.bin
+*.gguf
+*.pt
+*.pth
+*.onnx
+src/backend/test_output.txt
+
 # ===========================
 
 # --- Secrets & Environment ---
@@ -26,6 +37,15 @@ out/
 .next/
 src-tauri/target/
 src/tauri/target/
+
+# --- Tauri Resources & Binaries ---
+src-tauri/resources/*
+!src-tauri/resources/README.md
+src/tauri/resources/*
+!src/tauri/resources/README.md
+src/tauri/resources/atlas-backend/
+src-tauri/binaries/*
+src/tauri/binaries/*
 
 # --- IDE & System ---
 .vscode/

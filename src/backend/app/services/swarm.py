@@ -36,6 +36,9 @@ from app.services.llm import LLMService
 from qdrant_client import QdrantClient
 # Phase A3: Import prompt templates and validation
 from app.services import prompt_templates
+# Phase B: Import RerankService
+from app.services.rerank import get_rerank_service
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -204,7 +207,15 @@ def extract_xml_tag(text: str, tag: str) -> str:
     Returns:
         Content within tags, or empty string if not found
     """
-    pattern = f"<{tag}>(.*?)</{tag}>"
+    # 1. Strip markdown code blocks if present
+    code_block_match = re.search(r"```(?:\w+)?\s*(.*?)```", text, re.DOTALL)
+    if code_block_match:
+        text = code_block_match.group(1)
+
+    # 2. Extract content
+    # Matches <tag ...> content </tag>
+    # \b ensures we don't match <tagfoo>
+    pattern = f"<{tag}\\b[^>]*>(.*?)</{tag}\\s*>"
     match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
     return match.group(1).strip() if match else ""
 
@@ -324,7 +335,10 @@ def _build_navigator_graph(
         trace = list(state.get("reasoning_trace", []))
         trace.append("Navigator: Fetching knowledge graph subgraph...")
 
-        G = graph_service.get_networkx_subgraph(project_id=state["project_id"])
+
+
+        # Phase B: Use cached async method
+        G = await graph_service.get_networkx_subgraph(project_id=state["project_id"])
         trace.append(f"Navigator: Graph has {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
 
         if G.number_of_nodes() == 0:
@@ -379,11 +393,11 @@ def _build_navigator_graph(
 
         try:
             query_embedding = await llm_service.embed(state["query"])
-            results = qdrant_client.search(
+            results = qdrant_client.query_points(
                 collection_name=collection_name,
-                query_vector=query_embedding,
+                query=query_embedding,
                 limit=8,
-            )
+            ).points
 
             chunks = []
             for r in results:
@@ -590,7 +604,10 @@ Return your analysis as JSON:
         trace = list(state.get("reasoning_trace", []))
         trace.append("=== GRAPH EXPLORATION ===")
 
-        G = graph_service.get_networkx_subgraph(project_id=state["project_id"])
+
+
+        # Phase B: Use cached async method
+        G = await graph_service.get_networkx_subgraph(project_id=state["project_id"])
         trace.append(f"Graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
 
         if G.number_of_nodes() == 0:
@@ -664,33 +681,78 @@ Return your analysis as JSON:
         existing_ids = {c.get("metadata", {}).get("chunk_id") for c in all_chunks}
         new_chunks_count = 0
 
+        # Phase B: Parallel Retrieval & Reranking
+        
+        # 1. Execute vector searches in parallel
+        search_tasks = []
         for query_text in search_queries:
-            try:
-                query_embedding = await llm_service.embed(query_text)
-                results = qdrant_client.search(
+             async def _single_search(q):
+                q_embed = await llm_service.embed(q)
+                # Fetch more candidates for reranking (Top-K * 3)
+                resp = await asyncio.to_thread(
+                    qdrant_client.query_points,
                     collection_name=collection_name,
-                    query_vector=query_embedding,
-                    limit=5,  # Smaller batches for multi-turn
+                    query=q_embed,
+                    limit=settings.RERANK_TOP_N * 3 if settings.ENABLE_RERANKING else 5
                 )
+                return resp.points
+             search_tasks.append(_single_search(query_text))
+        
+        search_results_list = await asyncio.gather(*search_tasks, return_exceptions=True)
+        
+        raw_candidates = []
+        for res_list in search_results_list:
+            if isinstance(res_list, Exception):
+                logger.error(f"Search failed: {res_list}")
+                continue
+            for r in res_list:
+                payload = r.payload or {}
+                raw_candidates.append({
+                    "text": payload.get("text", ""),
+                    "metadata": {
+                        **payload.get("metadata", {}),
+                        "chunk_id": str(r.id),
+                    },
+                    "score": r.score,
+                    "doc_id": payload.get("doc_id", ""),
+                })
+        
+        # 2. De-duplicate candidates
+        unique_candidates = {}
+        for c in raw_candidates:
+            cid = c["metadata"]["chunk_id"]
+            if cid not in unique_candidates:
+                unique_candidates[cid] = c
+                
+        candidate_list = list(unique_candidates.values())
+        trace.append(f"Retrieved {len(candidate_list)} unique candidates before reranking")
+        
+        # 3. Rerank if enabled (Phase B)
+        if settings.ENABLE_RERANKING and candidate_list:
+            trace.append("Reranking candidates with FlashRank...")
+            rerank_service = get_rerank_service()
+            # Rerank against the original query (or the first search term which is usually the best proxy)
+            rerank_query = search_queries[0] if search_queries else state["query"]
+            
+            top_docs = await rerank_service.rerank(
+                query=rerank_query, 
+                documents=candidate_list, 
+                top_n=settings.RERANK_TOP_N
+            )
+            trace.append(f"Reranking complete. Kept top {len(top_docs)} chunks.")
+        else:
+            top_docs = candidate_list[:5]
 
-                for r in results:
-                    chunk_id = str(r.id)
-                    if chunk_id not in existing_ids:
-                        payload = r.payload or {}
-                        all_chunks.append({
-                            "text": payload.get("text", ""),
-                            "doc_id": payload.get("doc_id", ""),
-                            "metadata": {
-                                **payload.get("metadata", {}),
-                                "chunk_id": chunk_id,
-                            },
-                            "score": r.score,
-                            "retrieved_in_round": round_num,
-                        })
-                        existing_ids.add(chunk_id)
-                        new_chunks_count += 1
-            except Exception as e:
-                logger.warning(f"Search for '{query_text}' failed: {e}")
+        # 4. Integrate into state
+        for doc in top_docs:
+            chunk_id = doc["metadata"]["chunk_id"]
+            if chunk_id not in existing_ids:
+                all_chunks.append({
+                    **doc,
+                    "retrieved_in_round": round_num,
+                })
+                existing_ids.add(chunk_id)
+                new_chunks_count += 1
 
         trace.append(f"Retrieved {len(all_chunks)} total chunks ({new_chunks_count} new this round)")
 
@@ -1194,11 +1256,11 @@ Return your analysis as JSON:
             try:
                 # 1. Retrieve evidence for this sub-task
                 embedding = await llm_service.embed(task)
-                results = qdrant_client.search(
+                results = qdrant_client.query_points(
                     collection_name=collection_name,
-                    query_vector=embedding,
+                    query=embedding,
                     limit=4,
-                )
+                ).points
 
                 chunks_text = format_chunks([
                     {
@@ -1690,11 +1752,11 @@ Return ONLY a JSON array of 5 strings, each a focused sub-question:
             try:
                 # Search
                 query_embedding = await llm_service.embed(task)
-                results = qdrant_client.search(
+                results = qdrant_client.query_points(
                     collection_name=collection_name,
-                    query_vector=query_embedding,
+                    query=query_embedding,
                     limit=4,
-                )
+                ).points
 
                 chunk_texts = "\n".join(
                     [f"- {r.payload.get('text', '')[:300]}" for r in results[:3] if r.payload]

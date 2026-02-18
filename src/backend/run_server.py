@@ -74,25 +74,41 @@ def setup_environment():
 def main():
     """Start the Atlas backend server."""
     import uvicorn
-    
+
+    # Set up environment for bundled app (before loading config)
+    setup_environment()
+
+    from app.core.config import settings
+    host = settings.API_HOST
+    port = settings.API_PORT
+
     logger.info("Starting Atlas Backend Server...")
     logger.info(f"Python: {sys.version}")
     logger.info(f"Working directory: {os.getcwd()}")
-    
-    # Set up environment for bundled app
-    setup_environment()
-    
+    logger.info(f"Binding to http://{host}:{port}")
+
     # Import the app after environment setup
     from app.main import app
-    
-    # Run the server
-    uvicorn.run(
-        app,
-        host="127.0.0.1",
-        port=8000,
-        log_level="info",
-        access_log=True
-    )
+
+    try:
+        uvicorn.run(
+            app,
+            host=host,
+            port=port,
+            log_level="info",
+            access_log=True,
+        )
+    except OSError as e:
+        winerr = getattr(e, "winerror", None)
+        msg = str(e).lower()
+        if winerr == 10048 or "10048" in msg or "address already in use" in msg or "only one usage" in msg:
+            logger.error(
+                "Port %s is already in use. Either stop the other process using it "
+                "(e.g. another backend instance or Tauri app), or set API_PORT to a different port "
+                "(e.g. in src/backend/.env: API_PORT=8001).",
+                port,
+            )
+        raise
 
 
 if __name__ == "__main__":

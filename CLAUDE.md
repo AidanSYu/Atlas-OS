@@ -71,17 +71,20 @@ Project Root
 ### Running the Application
 
 ```powershell
-# Development mode (starts all components: Tauri window + Next.js frontend + FastAPI backend + SQLite + Qdrant)
+# Full app: Tauri window + Next.js frontend (run from repo root)
 npm run tauri:dev
+# or: npx tauri dev
 
-# Frontend only (for UI development)
+# Backend (run in a separate terminal; venv must be activated)
+.\scripts\dev\run_backend.ps1
+# or from src/backend:  python run_server.py
+
+# Frontend only (for UI development without Tauri shell)
 cd src/frontend
 npm run dev
-
-# Backend only (for API development)
-cd src/backend
-python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
+
+**Note:** `run_server.py` is the canonical backend entry point (used when bundled). For hot-reload during development you can use `python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000` from `src/backend` instead.
 
 ### Building the Application
 

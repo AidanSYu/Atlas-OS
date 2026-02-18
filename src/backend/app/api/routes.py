@@ -384,6 +384,11 @@ async def _process_document_background(
                     file_path_obj.unlink()
                 except Exception:
                     pass
+        else:
+            # Invalidate graph cache so new entities appear immediately
+            if graph_service is not None:
+                graph_service.invalidate_cache()
+                logger.info(f"Graph cache invalidated after ingesting {filename}")
     except Exception as e:
         logger.error(f"Background ingestion failed for {filename}: {str(e)}", exc_info=True)
         file_path_obj = Path(file_path)
@@ -504,7 +509,7 @@ async def get_full_graph(
     if graph_service is None:
         raise HTTPException(status_code=503, detail="Graph service unavailable")
     try:
-        return graph_service.get_full_graph(document_id=document_id, project_id=project_id)
+        return await graph_service.get_full_graph_cached(document_id=document_id, project_id=project_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting graph: {str(e)}")
 
