@@ -29,6 +29,7 @@ import re
 from typing import Any, Dict, List, Optional, TypedDict
 
 import networkx as nx
+import rustworkx as rx
 from langgraph.graph import StateGraph, END
 
 from app.services.graph import GraphService
@@ -38,9 +39,93 @@ from qdrant_client import QdrantClient
 from app.services import prompt_templates
 # Phase B: Import RerankService
 from app.services.rerank import get_rerank_service
+from app.services.agents.librarian import _build_librarian_graph, LibrarianState
+from app.services.agents.grounding import GroundingVerifier
+from app.services.agents.meta_router import route_intent, ensure_optimal_model
+from app.core.memory import get_memory_saver
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================
+# JSON SCHEMAS FOR CONSTRAINED GENERATION (Atlas 3.0 Task 0.4)
+# ============================================================
+# These schemas are passed to llama-cpp-python's GBNF grammar engine
+# to force valid JSON output from each swarm node.
+
+PLANNER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "understanding": {"type": "string"},
+        "information_needs": {"type": "array", "items": {"type": "string"}},
+        "search_terms": {"type": "array", "items": {"type": "string"}},
+        "potential_gaps": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["understanding", "information_needs", "search_terms", "potential_gaps"],
+}
+
+CRITIC_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "verdict": {"type": "string", "enum": ["PASS", "REFINE", "RETRIEVE_MORE"]},
+        "issues_found": {"type": "array", "items": {"type": "string"}},
+        "missing_aspects": {"type": "array", "items": {"type": "string"}},
+        "contradictions": {"type": "array", "items": {"type": "string"}},
+        "confidence_assessment": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW"]},
+    },
+    "required": ["verdict", "issues_found", "missing_aspects", "contradictions", "confidence_assessment"],
+}
+
+DECOMPOSER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "aspects": {"type": "array", "items": {"type": "string"}},
+        "sub_tasks": {"type": "array", "items": {"type": "string"}},
+        "coverage_check": {"type": "string"},
+    },
+    "required": ["aspects", "sub_tasks", "coverage_check"],
+}
+
+CROSS_CHECKER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "contradictions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "between": {"type": "array", "items": {"type": "string"}},
+                    "issue": {"type": "string"},
+                    "severity": {"type": "string", "enum": ["HIGH", "LOW"]},
+                },
+                "required": ["between", "issue", "severity"],
+            },
+        },
+        "coverage_gaps": {"type": "array", "items": {"type": "string"}},
+        "overall_verdict": {"type": "string", "enum": ["PASS", "HAS_CONFLICTS"]},
+    },
+    "required": ["contradictions", "coverage_gaps", "overall_verdict"],
+}
+
+RESOLVER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "resolutions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "conflict_id": {"type": "integer"},
+                    "resolution": {"type": "string"},
+                    "confidence": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW"]},
+                },
+                "required": ["conflict_id", "resolution", "confidence"],
+            },
+        },
+    },
+    "required": ["resolutions"],
+}
 
 
 # ============================================================
@@ -148,23 +233,46 @@ async def generate_with_validation(
     validator=None,
     node_name: str = "unknown",
     max_retries: int = 2,
+    json_schema: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """Generate LLM response with optional validation and retry logic (Phase A3).
+    """Generate LLM response with optional grammar constraints or validation retries.
+
+    Atlas 3.0: If a json_schema is provided, uses constrained generation (GBNF
+    grammar) to force valid JSON output. This is faster and more reliable than
+    the retry loop, which is kept as a fallback.
 
     Args:
         llm_service: LLM service instance
         prompt: The prompt to send
         temperature: Temperature for generation
         max_tokens: Max tokens for response
-        validator: Optional validation function
+        validator: Optional validation function (used when no schema)
         node_name: Name of the calling node (for logging)
         max_retries: Maximum number of retries for malformed outputs
+        json_schema: Optional JSON Schema dict for constrained generation
 
     Returns:
-        LLM response text
+        LLM response text (or JSON string if constrained)
     """
     from app.core.config import settings
 
+    # Atlas 3.0: Prefer constrained generation when a schema is provided
+    if json_schema is not None:
+        try:
+            result = await llm_service.generate_constrained(
+                prompt=prompt,
+                schema=json_schema,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            if result:
+                logger.debug(f"{node_name}: Constrained generation succeeded")
+                return json.dumps(result)
+            logger.warning(f"{node_name}: Constrained generation returned empty, falling back")
+        except Exception as e:
+            logger.warning(f"{node_name}: Constrained generation failed ({e}), falling back to retries")
+
+    # Fallback: unconstrained generation with validation retries
     response = await llm_service.generate(
         prompt=prompt,
         temperature=temperature,
@@ -279,37 +387,7 @@ def format_chunks(chunks: List[Dict[str, Any]], max_chunks: int = 5) -> str:
 # ROUTER - decides which brain to use
 # ============================================================
 
-async def route_intent(query: str, llm_service: LLMService) -> str:
-    """Classify query as DEEP_DISCOVERY or BROAD_RESEARCH.
 
-    DEEP_DISCOVERY: Synthesis, connection-finding, hypothesis generation.
-    BROAD_RESEARCH: Patent search, regulatory scan, literature survey.
-    """
-    prompt = f"""Classify this research query into exactly ONE category:
-
-DEEP_DISCOVERY - The user wants to find hidden connections, synthesize across domains,
-generate hypotheses, or discover relationships between concepts.
-Examples: "How might polymer X relate to drug delivery method Y?",
-          "What connections exist between these two papers?"
-
-BROAD_RESEARCH - The user wants a broad survey, patent landscape, regulatory overview,
-or comprehensive literature scan across many sources.
-Examples: "What patents exist for carbon nanotube synthesis?",
-          "Survey the regulatory landscape for gene therapy in the EU"
-
-Query: {query}
-
-Respond with ONLY the category name (DEEP_DISCOVERY or BROAD_RESEARCH):"""
-
-    try:
-        response = await llm_service.generate(prompt=prompt, temperature=0.0, max_tokens=20)
-        response = response.strip().upper()
-        if "BROAD" in response:
-            return "BROAD_RESEARCH"
-        return "DEEP_DISCOVERY"
-    except Exception as e:
-        logger.warning(f"Router classification failed: {e}, defaulting to DEEP_DISCOVERY")
-        return "DEEP_DISCOVERY"
 
 
 # ============================================================
@@ -337,11 +415,17 @@ def _build_navigator_graph(
 
 
 
-        # Phase B: Use cached async method
-        G = await graph_service.get_networkx_subgraph(project_id=state["project_id"])
-        trace.append(f"Navigator: Graph has {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
+        # Phase B: Use cached async method (Rustworkx)
+        try:
+            G, id_to_idx = await graph_service.get_rustworkx_subgraph(project_id=state["project_id"])
+        except Exception as e:
+            # Fallback (safety)
+            trace.append(f"Navigator: Graph load failed ({e}), skipping analysis")
+            return {**state, "subgraph_summary": "Graph unavailable.", "reasoning_trace": trace}
 
-        if G.number_of_nodes() == 0:
+        trace.append(f"Navigator: Graph has {G.num_nodes()} nodes, {G.num_edges()} edges")
+
+        if G.num_nodes() == 0:
             trace.append("Navigator: Empty graph - no entities found")
             return {**state, "subgraph_summary": "No graph data available.", "reasoning_trace": trace}
 
@@ -349,37 +433,50 @@ def _build_navigator_graph(
         summary_parts = []
 
         # Degree centrality for key entities
-        if G.number_of_nodes() > 0:
-            centrality = nx.degree_centrality(G)
-            top_nodes = sorted(centrality.items(), key=lambda x: x[1], reverse=True)[:10]
+        if G.num_nodes() > 0:
+            # rustworkx degree_centrality returns a dict {node_idx: score}? No, it returns {node_index: centrality}
+            # actually rx.degree_centrality(G) returns a dict of index -> score
+            centrality = rx.degree_centrality(G)
+            # Sort by score
+            top_indices = sorted(centrality.items(), key=lambda x: x[1], reverse=True)[:10]
+            
             summary_parts.append("Key entities (by connectivity):")
-            for node_id, score in top_nodes:
-                attrs = G.nodes[node_id]
+            for idx, score in top_indices:
+                node_data = G.get_node_data(idx)
                 summary_parts.append(
-                    f"  - {attrs.get('name', node_id)} ({attrs.get('type', 'unknown')}) "
+                    f"  - {node_data.get('name', '?')} ({node_data.get('type', 'unknown')}) "
                     f"[centrality: {score:.3f}]"
                 )
 
         # Connected components
-        undirected = G.to_undirected()
-        components = list(nx.connected_components(undirected))
+        # rustworkx uses integer indices for components
+        components = rx.weakly_connected_components(G)
         trace.append(f"Navigator: Found {len(components)} connected components")
         if len(components) > 1:
             summary_parts.append(f"\nGraph has {len(components)} clusters of concepts.")
-            for i, comp in enumerate(sorted(components, key=len, reverse=True)[:5]):
-                names = [G.nodes[n].get("name", n) for n in list(comp)[:5]]
+            # Sort by size
+            components.sort(key=len, reverse=True)
+            for i, comp in enumerate(components[:5]):
+                # comp is a list of node indices
+                names = [G.get_node_data(idx).get("name", str(idx)) for idx in list(comp)[:5]]
                 summary_parts.append(f"  Cluster {i+1}: {', '.join(names)}{'...' if len(comp) > 5 else ''}")
 
-        # Shortest paths between highly central nodes (look for bridges)
-        if len(top_nodes) >= 2:
+        # Shortest paths between highly central nodes
+        if len(top_indices) >= 2:
             try:
-                src = top_nodes[0][0]
-                tgt = top_nodes[1][0]
-                path = nx.shortest_path(undirected, src, tgt)
-                path_names = [G.nodes[n].get("name", n) for n in path]
-                summary_parts.append(f"\nKey path: {' -> '.join(path_names)}")
-            except nx.NetworkXNoPath:
-                summary_parts.append("\nNo path between top entities (separate clusters)")
+                src_idx = top_indices[0][0]
+                tgt_idx = top_indices[1][0]
+                # Dijkstra returns a path (list of indices)
+                path = rx.dijkstra_shortest_paths(G, src_idx, target=tgt_idx)
+                # path is a dict {target: [indices]}
+                if path and tgt_idx in path:
+                    real_path = path[tgt_idx]
+                    path_names = [G.get_node_data(idx).get("name", str(idx)) for idx in real_path]
+                    summary_parts.append(f"\nKey path: {' -> '.join(path_names)}")
+                else:
+                    summary_parts.append("\nNo path between top entities")
+            except Exception:
+                 summary_parts.append("\nNo path between top entities")
 
         subgraph_summary = "\n".join(summary_parts) if summary_parts else "Graph structure analyzed."
         trace.append("Navigator: Subgraph analysis complete")
@@ -564,6 +661,7 @@ Return your analysis as JSON:
                 validator=validator,
                 node_name="Planner",
                 max_retries=settings.MAX_VALIDATION_RETRIES if hasattr(settings, 'MAX_VALIDATION_RETRIES') else 2,
+                json_schema=PLANNER_SCHEMA,
             )
             plan = parse_json_response(plan_json)
 
@@ -606,11 +704,15 @@ Return your analysis as JSON:
 
 
 
-        # Phase B: Use cached async method
-        G = await graph_service.get_networkx_subgraph(project_id=state["project_id"])
-        trace.append(f"Graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
+        # Phase B: Use cached async method (Rustworkx)
+        try:
+            G, id_to_idx = await graph_service.get_rustworkx_subgraph(project_id=state["project_id"])
+        except Exception:
+             G = rx.PyDiGraph() # Fallback
 
-        if G.number_of_nodes() == 0:
+        trace.append(f"Graph: {G.num_nodes()} nodes, {G.num_edges()} edges")
+
+        if G.num_nodes() == 0:
             return {
                 **state,
                 "graph_summary": "No graph data available.",
@@ -621,34 +723,39 @@ Return your analysis as JSON:
         summary_parts = []
 
         # Degree centrality
-        centrality = nx.degree_centrality(G)
-        top_nodes = sorted(centrality.items(), key=lambda x: x[1], reverse=True)[:10]
+        centrality = rx.degree_centrality(G)
+        top_indices = sorted(centrality.items(), key=lambda x: x[1], reverse=True)[:10]
 
         summary_parts.append("Key entities (by connectivity):")
-        for node_id, score in top_nodes:
-            attrs = G.nodes[node_id]
-            name = attrs.get('name', node_id)
-            node_type = attrs.get('type', 'unknown')
+        for idx, score in top_indices:
+            node_data = G.get_node_data(idx)
+            name = node_data.get('name', '?')
+            node_type = node_data.get('type', 'unknown')
             summary_parts.append(f"  - {name} ({node_type}) [centrality: {score:.3f}]")
 
         # Connected components
-        undirected = G.to_undirected()
-        components = list(nx.connected_components(undirected))
+        components = rx.weakly_connected_components(G)
         if len(components) > 1:
             summary_parts.append(f"\nGraph has {len(components)} concept clusters:")
-            for i, comp in enumerate(sorted(components, key=len, reverse=True)[:5]):
-                names = [G.nodes[n].get("name", n) for n in list(comp)[:5]]
-                summary_parts.append(f"  Cluster {i+1}: {', '.join(names)}")
+            components.sort(key=len, reverse=True)
+            for i, comp in enumerate(components[:5]):
+                 names = [G.get_node_data(idx).get("name", str(idx)) for idx in list(comp)[:5]]
+                 summary_parts.append(f"  Cluster {i+1}: {', '.join(names)}")
 
         # Key paths
-        if len(top_nodes) >= 2:
+        if len(top_indices) >= 2:
             try:
-                src, tgt = top_nodes[0][0], top_nodes[1][0]
-                path = nx.shortest_path(undirected, src, tgt)
-                path_names = [G.nodes[n].get("name", n) for n in path]
-                summary_parts.append(f"\nKey path: {' → '.join(path_names)}")
-            except nx.NetworkXNoPath:
-                summary_parts.append("\nTop entities are in separate clusters")
+                src_idx = top_indices[0][0]
+                tgt_idx = top_indices[1][0]
+                path = rx.dijkstra_shortest_paths(G, src_idx, target=tgt_idx)
+                if path and tgt_idx in path:
+                    real_path = path[tgt_idx]
+                    path_names = [G.get_node_data(idx).get("name", str(idx)) for idx in real_path]
+                    summary_parts.append(f"\nKey path: {' -> '.join(path_names)}")
+                else:
+                    summary_parts.append("\nTop entities are in separate clusters")
+            except Exception:
+                 summary_parts.append("\nTop entities are in separate clusters")
 
         graph_summary = "\n".join(summary_parts)
         trace.append("Graph analysis complete")
@@ -947,6 +1054,12 @@ RETRIEVE_MORE = Major gaps, need additional evidence
             validator = None
 
         try:
+            # Phase 1.4: Grounding Verification
+            verifier = GroundingVerifier(llm_service, qdrant_client, collection_name)
+            grounding_result = await verifier.verify_response(hypothesis, query)
+            
+            trace.append(f"Grounding Score: {grounding_result.get('overall_grounding_score', 0):.2f}")
+
             response = await generate_with_validation(
                 llm_service=llm_service,
                 prompt=prompt,
@@ -955,6 +1068,7 @@ RETRIEVE_MORE = Major gaps, need additional evidence
                 validator=validator,
                 node_name="Critic",
                 max_retries=settings.MAX_VALIDATION_RETRIES if hasattr(settings, 'MAX_VALIDATION_RETRIES') else 2,
+                json_schema=CRITIC_SCHEMA,
             )
             critique = parse_json_response(response)
 
@@ -962,6 +1076,13 @@ RETRIEVE_MORE = Major gaps, need additional evidence
             issues = critique.get("issues_found", [])
             missing = critique.get("missing_aspects", [])
             contradictions = critique.get("contradictions", [])
+
+            # Adjust verdict based on grounding
+            if grounding_result.get('overall_grounding_score', 1.0) < 0.5:
+                 trace.append("Low grounding score detected, forcing refinement")
+                 if verdict == "PASS":
+                     verdict = "REFINE"
+                 issues.append("Low grounding score: citations may be hallucinated")
 
             trace.append(f"Verification verdict: {verdict}")
             trace.append(f"Issues found: {len(issues)}")
@@ -1205,6 +1326,7 @@ Return your analysis as JSON:
                 validator=validator,
                 node_name="Decomposer",
                 max_retries=settings.MAX_VALIDATION_RETRIES if hasattr(settings, 'MAX_VALIDATION_RETRIES') else 2,
+                json_schema=DECOMPOSER_SCHEMA,
             )
             decomp = parse_json_response(response)
 
@@ -1437,6 +1559,26 @@ HAS_CONFLICTS = Significant contradictions or major coverage gaps detected
             validator = None
 
         try:
+            # Phase 1.4: Grounding Verification for each sub-task result
+            verifier = GroundingVerifier(llm_service, qdrant_client, collection_name)
+            
+            trace.append("Verifying sub-task answers for grounding...")
+            grounding_issues = []
+            
+            for i, result in enumerate(sub_results):
+                answer_text = result.get("answer", "")
+                task_query = result.get("task", "")
+                
+                if not answer_text or "No relevant documents" in answer_text:
+                    continue
+                    
+                g_result = await verifier.verify_response(answer_text, task_query)
+                score = g_result.get("overall_grounding_score", 0.0)
+                
+                if score < 0.6:
+                    grounding_issues.append(f"Task {i+1}: Low grounding score ({score:.2f})")
+                    trace.append(f"  - Task {i+1} has low grounding ({score:.2f})")
+
             response = await generate_with_validation(
                 llm_service=llm_service,
                 prompt=prompt,
@@ -1445,12 +1587,22 @@ HAS_CONFLICTS = Significant contradictions or major coverage gaps detected
                 validator=validator,
                 node_name="Cross-Checker",
                 max_retries=settings.MAX_VALIDATION_RETRIES if hasattr(settings, 'MAX_VALIDATION_RETRIES') else 2,
+                json_schema=CROSS_CHECKER_SCHEMA,
             )
             check = parse_json_response(response)
 
             contradictions = check.get("contradictions", [])
             gaps = check.get("coverage_gaps", [])
             verdict = check.get("overall_verdict", "PASS")
+            
+            # If significant grounding issues, downgrade verdict
+            if grounding_issues and verdict == "PASS":
+                verdict = "HAS_CONFLICTS"
+                contradictions.append({
+                    "between": ["Grounding Check"], 
+                    "issue": "Multiple sub-tasks have low grounding scores (potential hallucinations)",
+                    "severity": "HIGH"
+                })
 
             trace.append(f"Verification verdict: {verdict}")
             trace.append(f"Contradictions found: {len(contradictions)}")
@@ -1626,6 +1778,7 @@ Return JSON: {{ "resolutions": [ {{ "conflict_id": 0, "resolution": "...", "conf
                 validator=validator,
                 node_name="Resolver",
                 max_retries=settings.MAX_VALIDATION_RETRIES if hasattr(settings, 'MAX_VALIDATION_RETRIES') else 2,
+                json_schema=RESOLVER_SCHEMA,
             )
             
             result = parse_json_response(response)
@@ -1907,10 +2060,31 @@ async def run_swarm_query(
 
     # Step 1: Route
     intent = await route_intent(query, llm_service)
+    
+    # Phase 1 cleanup: Ensure we use the best model for this intent
+    if hasattr(llm_service, "load_model"):
+        await ensure_optimal_model(intent, llm_service)
+
     logger.info(f"Swarm router classified query as: {intent}")
 
     # Step 2: Dispatch to appropriate brain
-    if intent == "DEEP_DISCOVERY":
+    if intent == "SIMPLE":
+        # Librarian for fast fact retrieval
+        logger.info("Using Librarian (fast fact retrieval)")
+        initial_state: LibrarianState = {
+            "query": query,
+            "project_id": project_id,
+            "brain": "librarian",
+            "chunks": [],
+            "answer": "",
+            "citations": [],
+            "confidence_score": 0.0,
+            "reasoning_trace": [f"Router: Classified as {intent}", "Using Librarian Agent"],
+            "status": "running"
+        }
+        sg = _build_librarian_graph(llm_service, qdrant_client, collection_name)
+
+    elif intent == "DEEP_DISCOVERY":
         brain_name = "navigator"
 
         # Use Navigator 2.0 if reflection is enabled
@@ -1960,8 +2134,13 @@ async def run_swarm_query(
             }
             sg = _build_navigator_graph(graph_service, llm_service, qdrant_client, collection_name)
     else:
-        # Cortex for broad research
+        # Cortex for BROAD_RESEARCH or MULTI_STEP (for now)
         brain_name = "cortex"
+        
+        # If MULTI_STEP, we might want to note that in the trace
+        trace_note = "Cortex 2.0 with cross-checking enabled"
+        if intent == "MULTI_STEP":
+            trace_note += " (handling MULTI_STEP query via broad decomposition)"
 
         # Use Cortex 2.0 if cross-checking is enabled
         if settings.ENABLE_CORTEX_CROSSCHECK:
@@ -1979,7 +2158,7 @@ async def run_swarm_query(
                 "verification_result": "",
                 "resolutions": [],
                 "hypothesis": "",
-                "reasoning_trace": [f"Router: Classified as {intent}", "Cortex 2.0 with cross-checking enabled"],
+                "reasoning_trace": [f"Router: Classified as {intent}", trace_note],
                 "evidence": [],
                 "confidence_score": 0.5,
                 "status": "running",
@@ -2004,10 +2183,16 @@ async def run_swarm_query(
             }
             sg = _build_cortex_graph(llm_service, qdrant_client, collection_name)
 
-    compiled = sg.compile()
+    # Compile the graph with memory checkpointing
+    memory = await get_memory_saver()
+    graph = sg.compile(checkpointer=memory)
 
-    # Step 3: Execute
-    final_state = await compiled.ainvoke(initial_state)
+    # Execute
+    # Use project_id as thread_id for session persistence (Phase 1.5)
+    # In a real app, this would be a unique session_id passed from the frontend
+    config = {"configurable": {"thread_id": project_id}}
+    
+    final_state = await graph.ainvoke(initial_state, config=config)
 
     # Step 4: Build response (Navigator 2.0 includes additional fields)
     return {

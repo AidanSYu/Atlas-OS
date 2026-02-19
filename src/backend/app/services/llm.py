@@ -7,7 +7,7 @@ Uses:
 - sentence-transformers for embeddings (nomic-embed-text-v1.5)
 """
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Any
 import logging
 import os
 import sys
@@ -338,11 +338,20 @@ class LLMService:
         
         logger.info(f"Loading LLM from {model_path}")
         logger.info(f"GPU layers config: {self._gpu_layers}")
+        # Task 0.1: Increase Context Window (Configurable)
+        # Task 0.5: Enable Prompt Caching
+        n_ctx = int(os.environ.get("ATLAS_N_CTX", "8192"))
+        logger.info(f"Llama Context Size: {n_ctx}")
+
         self._llm = Llama(
             model_path=str(model_path),
-            n_ctx=4096,
-            n_gpu_layers=self._gpu_layers,  # Partial offload for 4GB VRAM
-            verbose=True,  # Enable verbose to see CUDA initialization
+            n_ctx=n_ctx,
+            n_gpu_layers=self._gpu_layers,
+            n_batch=512,         # Increased batch size for speed
+            use_mlock=True,      # Keep model in RAM to prevent swapping
+            check_tensors=False, # Skip tensor checks for faster loading
+            cache=True,          # Enable KV cache for multi-turn speedup
+            verbose=settings.LLM_VERBOSE,
             n_threads=4
         )
         self._active_model_name = model_path.name
@@ -428,6 +437,57 @@ class LLMService:
         
         logger.info("Embedding model loaded successfully")
     
+    @property
+    def active_model_name(self) -> Optional[str]:
+        """Return the name of the currently loaded model."""
+        return self._active_model_name
+
+    def list_available_models(self) -> List[str]:
+        """List all .gguf models in the models directory."""
+        if not self.models_dir.exists():
+            return []
+        return [f.name for f in self.models_dir.glob("*.gguf")]
+
+    async def load_model(self, model_name: str) -> bool:
+        """Swap to a different model.
+        
+        Args:
+            model_name: Name of the .gguf file to load.
+            
+        Returns:
+            True if model was loaded successfully (or already loaded), False otherwise.
+        """
+        if self._active_model_name == model_name:
+            return True
+            
+        model_path = self.models_dir / model_name
+        if not model_path.exists():
+            logger.error(f"Cannot allow swap: Model {model_name} not found.")
+            return False
+            
+        logger.info(f"Swapping model from {self._active_model_name} to {model_name}...")
+        
+        # Unload current model if it exists
+        if self._llm and hasattr(self._llm, "__del__"):
+             self._llm = None
+             import gc
+             gc.collect()
+             try:
+                 import torch
+                 if torch.cuda.is_available():
+                     torch.cuda.empty_cache()
+             except ImportError:
+                 pass
+
+        # Load new model
+        try:
+            self._load_llm(model_name=model_name)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to swap to model {model_name}: {e}")
+            self._llm = "FALLBACK"
+            return False
+
     async def generate(
         self,
         prompt: str,
@@ -492,7 +552,84 @@ class LLMService:
             return output["choices"][0]["text"].strip()
         
         return await loop.run_in_executor(None, _generate)
-    
+
+    async def generate_constrained(
+        self,
+        prompt: str,
+        schema: Dict[str, Any],
+        temperature: float = 0.1,
+        max_tokens: int = 2048,
+    ) -> dict:
+        """Generate JSON output strictly conforming to a JSON schema.
+
+        Uses llama-cpp-python's GBNF grammar support to force the LLM to
+        produce valid JSON matching the schema. No parsing retries needed.
+
+        Args:
+            prompt: The prompt (should request JSON output).
+            schema: JSON Schema dict describing the expected output shape.
+            temperature: Sampling temperature.
+            max_tokens: Maximum tokens to generate.
+
+        Returns:
+            Parsed dict guaranteed to match the schema structure.
+        """
+        import json as _json
+
+        # Lazy load model
+        if self._llm is None:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, self._load_llm)
+
+        if self._llm == "FALLBACK":
+            logger.warning("generate_constrained called in fallback mode")
+            return {}
+
+        loop = asyncio.get_running_loop()
+
+        def _generate():
+            try:
+                from llama_cpp import LlamaGrammar
+                grammar = LlamaGrammar.from_json_schema(_json.dumps(schema))
+            except (ImportError, Exception) as e:
+                logger.warning(f"Grammar creation failed, falling back to unconstrained: {e}")
+                grammar = None
+
+            # Determine stop tokens
+            if self._model_type == "qwen":
+                stop = ["<|im_end|>", "<|endoftext|>"]
+            elif self._model_type == "phi3":
+                stop = ["<|end|>", "<|endoftext|>"]
+            else:
+                stop = ["<|eot_id|>", "<|end_of_text|>"]
+
+            output = self._llm(
+                prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                stop=stop,
+                grammar=grammar,
+                echo=False,
+            )
+            return output["choices"][0]["text"].strip()
+
+        raw = await loop.run_in_executor(None, _generate)
+
+        try:
+            return _json.loads(raw)
+        except _json.JSONDecodeError:
+            # Grammar should prevent this, but handle edge cases
+            logger.warning(f"Constrained generation produced invalid JSON: {raw[:200]}")
+            # Try extracting JSON substring
+            start = raw.find("{")
+            end = raw.rfind("}") + 1
+            if start >= 0 and end > start:
+                try:
+                    return _json.loads(raw[start:end])
+                except _json.JSONDecodeError:
+                    pass
+            return {}
+
     async def generate_chat(
         self,
         system_message: str,

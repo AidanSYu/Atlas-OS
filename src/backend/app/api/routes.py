@@ -1,7 +1,8 @@
 """FastAPI route handlers for Atlas Sidecar API."""
 from fastapi import APIRouter, UploadFile, File, HTTPException, Query, BackgroundTasks
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
+import json
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 import shutil
@@ -75,14 +76,24 @@ class ProjectResponse(BaseModel):
 class SwarmRequest(BaseModel):
     project_id: str
     query: str
+    
+
+class SwarmStreamRequest(BaseModel):
+    project_id: str
+    query: str
+    session_id: Optional[str] = None  # For memory persistence
 
 
 class SwarmResponse(BaseModel):
-    brain_used: str  # "navigator" or "cortex"
+    brain_used: str  # "librarian", "navigator", or "cortex"
     hypothesis: str
     evidence: List[Dict[str, Any]]
     reasoning_trace: List[str]
     status: str
+    # Task 0.3: New fields for Navigator 2.0 / Cortex 2.0
+    confidence_score: Optional[float] = None
+    iterations: Optional[int] = None
+    contradictions: List[Dict[str, Any]] = []
 
 
 class ModelLoadRequest(BaseModel):

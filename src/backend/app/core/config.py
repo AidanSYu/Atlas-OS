@@ -79,6 +79,12 @@ class Settings(BaseSettings):
     USE_RAPTOR: bool = True                # Enable RAPTOR hierarchy on ingestion
     RAPTOR_CLUSTERS: int = 5              # Number of L1 clusters per document
 
+    # Atlas 3.0: LLM Performance Configuration
+    LLM_CONTEXT_SIZE: int = 8192           # Context window (tokens). 8192 for 7B, 4096 for 3B if OOM
+    LLM_N_BATCH: int = 512                 # Batch size for prompt processing
+    LLM_USE_MLOCK: bool = True             # Keep model weights pinned in RAM (prevents swapping)
+    LLM_VERBOSE: bool = False              # Disable verbose llama.cpp logging in production
+
 
 settings = Settings()
 

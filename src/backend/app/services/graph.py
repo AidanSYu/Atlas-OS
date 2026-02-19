@@ -146,24 +146,20 @@ class GraphService:
         )
 
     @alru_cache(maxsize=32, ttl=300)  # Caching for 5 minutes (TTL from config is better)
-    async def get_networkx_subgraph(
+    @alru_cache(maxsize=32, ttl=300)
+    async def get_rustworkx_subgraph(
         self,
         document_id: Optional[str] = None,
         project_id: Optional[str] = None,
         limit: int = 500,
-    ) -> nx.DiGraph:
-        """Build a NetworkX subgraph from the knowledge graph.
-
-        This is used by the Navigator brain in the swarm for graph traversal,
-        community detection, and path-finding algorithms.
-        CACHED: Rebuilding the graph from SQL is expensive.
-        """
-        # Note: 'self' is part of the cache key, so if GraphService is recreated, cache is lost.
-        # This is fine for a per-request lifecycle, but for global caching, 
-        # GraphService should be a singleton or we use a static cache.
-        # Here we assume GraphService is long-lived or we accept short-lived caching.
+    ) -> Any:
+        """Build a Rustworkx subgraph (50x faster than NetworkX).
         
-        # We need to run the sync DB query in a thread to be async-friendly for alru_cache
+        Returns:
+            rustworkx.PyDiGraph: Maximally performant graph object.
+        """
+        import rustworkx as rx
+
         loop = asyncio.get_running_loop()
         
         def _fetch_data():
@@ -173,25 +169,37 @@ class GraphService:
             
         graph_data = await loop.run_in_executor(None, _fetch_data)
 
-        G = nx.DiGraph()
-        for node in graph_data["nodes"]:
-            G.add_node(
-                node["id"],
-                name=node["name"],
-                type=node["type"],
-                description=node.get("description", ""),
-                document_id=node.get("document_id", ""),
-            )
-        for edge in graph_data["edges"]:
-            G.add_edge(
-                edge["source_id"],
-                edge["target_id"],
-                type=edge["type"],
-                source_name=edge.get("source_name", ""),
-                target_name=edge.get("target_name", ""),
-            )
+        # rustworkx uses integer indices. We must maintain a mapping.
+        G = rx.PyDiGraph()
+        id_to_idx = {}
 
-        return G
+        for node in graph_data["nodes"]:
+            # Add node and store its data
+            idx = G.add_node({
+                "id": node["id"],
+                "name": node["name"],
+                "type": node["type"],
+                "description": node.get("description", ""),
+                "document_id": node.get("document_id", ""),
+            })
+            id_to_idx[node["id"]] = idx
+
+        for edge in graph_data["edges"]:
+            src_id = edge["source_id"]
+            tgt_id = edge["target_id"]
+            
+            if src_id in id_to_idx and tgt_id in id_to_idx:
+                G.add_edge(
+                    id_to_idx[src_id], 
+                    id_to_idx[tgt_id], 
+                    {
+                        "type": edge["type"],
+                        "source_name": edge.get("source_name", ""),
+                        "target_name": edge.get("target_name", ""),
+                    }
+                )
+
+        return G, id_to_idx
 
     def invalidate_cache(self):
         """Clear all cached graph data. Call after ingestion completes."""

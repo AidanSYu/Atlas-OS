@@ -12,7 +12,7 @@ Production Desktop Sidecar: SQLite + embedded Qdrant + bundled LLMs.
 """
 from typing import List, Dict, Any, Optional, Set
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import or_, and_
+from sqlalchemy import or_, and_, func
 import json
 import logging
 import asyncio
@@ -153,12 +153,14 @@ If no dates/entities found, return empty arrays."""
                     if project_id:
                         node_query = node_query.filter(Node.project_id == project_id)
 
-                    # For SQLite, filter properties->name in Python after fetching
-                    nodes = node_query.limit(100).all()
-                    matching_nodes = [
-                        n for n in nodes
-                        if entity_name.lower() in (n.properties or {}).get("name", "").lower()
-                    ]
+                    # Task 0.2: Fix Entity Matching Performance
+                    # Use SQLite json_extract for SQL-level filtering (no Python loop)
+                    # This replaces the old logic that loaded 100+ nodes into memory
+                    matching_nodes = node_query.filter(
+                        func.lower(
+                            func.json_extract(Node.properties, '$.name')
+                        ).contains(entity_name.lower())
+                    ).limit(20).all()
 
                     seen_chunk_ids = set()
                     for node in matching_nodes:
