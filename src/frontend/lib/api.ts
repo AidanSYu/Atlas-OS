@@ -133,11 +133,20 @@ export interface ModelStatusResponse {
   fallback: boolean;
 }
 
+export interface GroundingEvent {
+  claim: string;
+  status: 'GROUNDED' | 'SUPPORTED' | 'UNVERIFIED' | 'INFERRED';
+  confidence: number;
+  source?: string;
+  page?: number;
+}
+
 export interface SwarmEvidence {
   source: string;
   page: number;
   excerpt: string;
   relevance: number;
+  grounding_status?: 'GROUNDED' | 'SUPPORTED' | 'UNVERIFIED' | 'INFERRED';
 }
 
 export interface SwarmResponse {
@@ -146,6 +155,104 @@ export interface SwarmResponse {
   evidence: SwarmEvidence[];
   reasoning_trace: string[];
   status: string;
+  confidence_score?: number;
+  iterations?: number;
+  contradictions?: Array<{
+    claim_a: string;
+    claim_b: string;
+    severity: 'HIGH' | 'LOW';
+    resolution?: string;
+  }>;
+}
+
+// Phase 4: Context Engine types
+export interface PaperStructure {
+  title: string;
+  authors: string[];
+  year: number | null;
+  abstract: string;
+  methodology: string;
+  key_findings: string[];
+  limitations: string[];
+  paper_type: string;
+  page_count: number;
+  total_chars: number;
+}
+
+export interface DocumentStructureResponse {
+  doc_id: string;
+  filename: string;
+  status: string;
+  uploaded_at: string | null;
+  structure: PaperStructure;
+}
+
+export interface RelatedPassage {
+  text: string;
+  source: string;
+  page: number;
+  doc_id: string;
+  score: number;
+  chunk_id: string;
+}
+
+export interface DocumentChunk {
+  chunk_id: string;
+  text: string;
+  chunk_index: number;
+  page_number: number | null;
+  start_char: number | null;
+  end_char: number | null;
+  metadata: Record<string, any>;
+}
+
+export interface ContextSuggestions {
+  related_passages: RelatedPassage[];
+  connected_concepts: Array<{
+    id: string;
+    name: string;
+    type: string;
+    document_id: string;
+    confidence: number;
+  }>;
+  suggestions: string[];
+}
+
+// Phase 5: Import/Export types
+export interface ImportResult {
+  status: string;
+  imported: Array<{
+    doc_id: string;
+    bibtex_key: string;
+    title: string;
+    authors: string[];
+    year: number | null;
+  }>;
+  skipped: Array<{
+    bibtex_key: string;
+    reason: string;
+  }>;
+  total_entries: number;
+  total_imported: number;
+  error?: string;
+}
+
+export interface MarkdownExportResult {
+  markdown: string;
+  bibtex: string;
+  filename: string;
+}
+
+export interface FormattedCitation {
+  doc_id: string;
+  filename: string;
+  citation: string;
+  bibtex_key: string;
+}
+
+export interface CitationFormatResult {
+  citations: FormattedCitation[];
+  style: string;
 }
 
 // ============================================================
@@ -306,4 +413,237 @@ export const api = {
     });
     return handleResponse(response);
   },
+
+  // ---- Context Engine (Phase 4) ----
+
+  async getDocumentStructure(docId: string): Promise<DocumentStructureResponse> {
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/files/${encodeURIComponent(docId)}/structure`
+    );
+    return handleResponse(response);
+  },
+
+  async getRelatedPassages(
+    docId: string,
+    text: string,
+    projectId?: string,
+    limit: number = 8
+  ): Promise<RelatedPassage[]> {
+    const params = new URLSearchParams({ text, limit: String(limit) });
+    if (projectId) params.append('project_id', projectId);
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/files/${encodeURIComponent(docId)}/related?${params.toString()}`
+    );
+    return handleResponse(response);
+  },
+
+  async getDocumentChunks(
+    docId: string,
+    page?: number,
+    limit: number = 50
+  ): Promise<DocumentChunk[]> {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (page !== undefined) params.append('page', String(page));
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/files/${encodeURIComponent(docId)}/chunks?${params.toString()}`
+    );
+    return handleResponse(response);
+  },
+
+  async getContextSuggestions(
+    projectId: string,
+    selectedText?: string,
+    currentDocId?: string,
+    currentPage?: number
+  ): Promise<ContextSuggestions> {
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/api/context`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project_id: projectId,
+          selected_text: selectedText,
+          current_doc_id: currentDocId,
+          current_page: currentPage,
+        }),
+      }
+    );
+    return handleResponse(response);
+  },
+
+  // ---- Import / Export (Phase 5) ----
+
+  async importBibtex(file: File, projectId: string): Promise<ImportResult> {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/import/bibtex?project_id=${encodeURIComponent(projectId)}`,
+      { method: 'POST', body: formData }
+    );
+    return handleResponse(response);
+  },
+
+  async exportBibtexProject(projectId: string): Promise<Blob> {
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/export/bibtex/${encodeURIComponent(projectId)}`
+    );
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ detail: response.statusText }));
+      throw new Error(`Export failed: ${err.detail || response.statusText}`);
+    }
+    return response.blob();
+  },
+
+  async exportBibtexSelection(docIds: string[]): Promise<Blob> {
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/export/bibtex`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ doc_ids: docIds, style: 'apa' }),
+      }
+    );
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ detail: response.statusText }));
+      throw new Error(`Export failed: ${err.detail || response.statusText}`);
+    }
+    return response.blob();
+  },
+
+  async exportMarkdown(params: {
+    content: string;
+    citations: Array<{ source: string; page: number; doc_id?: string }>;
+    projectId: string;
+    title?: string;
+    author?: string;
+    style?: string;
+  }): Promise<MarkdownExportResult> {
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/export/markdown`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: params.content,
+          citations: params.citations,
+          project_id: params.projectId,
+          title: params.title || 'Research Synthesis',
+          author: params.author || '',
+          style: params.style || 'apa',
+        }),
+      }
+    );
+    return handleResponse(response);
+  },
+
+  async exportChatHistory(
+    messages: Array<{ role: string; content: string; citations?: any[] }>,
+    projectName?: string
+  ): Promise<{ markdown: string }> {
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/export/chat`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages,
+          project_name: projectName || 'Atlas Research',
+        }),
+      }
+    );
+    return handleResponse(response);
+  },
+
+  async formatCitations(
+    docIds: string[],
+    style: string = 'apa'
+  ): Promise<CitationFormatResult> {
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/export/citations/format`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ doc_ids: docIds, style }),
+      }
+    );
+    return handleResponse(response);
+  },
+
+  // ---- Swarm (Two-Brain Agentic RAG) ----
+
+  async streamSwarm(
+    query: string,
+    projectId: string,
+    onEvent: (type: string, data: any) => void,
+    sessionId?: string,
+    signal?: AbortSignal
+  ): Promise<void> {
+    const response = await fetch(`${API_BASE_URL}/api/swarm/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query,
+        project_id: projectId,
+        session_id: sessionId
+      }),
+      signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Streaming failed: ${response.statusText}`);
+    }
+
+    const reader = response.body?.getReader();
+    const decoder = new TextDecoder();
+
+    if (!reader) return;
+
+    // FIX: Persistent buffer to handle SSE events spanning multiple chunks
+    let buffer = '';
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        buffer += chunk; // Append to persistent buffer
+
+        // Split by double newline (SSE standard block separator)
+        const events = buffer.split('\n\n');
+
+        // Keep the last incomplete event in the buffer
+        buffer = events.pop() || '';
+
+        for (const eventBlock of events) {
+          if (!eventBlock.trim()) continue;
+
+          // Simple SSE parsing
+          let type = '';
+          let data = null;
+
+          const lines = eventBlock.split('\n');
+          for (const line of lines) {
+            if (line.startsWith('event: ')) {
+              type = line.substring(7).trim();
+            } else if (line.startsWith('data: ')) {
+              try {
+                data = JSON.parse(line.substring(6).trim());
+              } catch (e) {
+                console.error('JSON parse error in stream:', e);
+              }
+            }
+          }
+
+          if (type && data) {
+            onEvent(type, data);
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  },
 };
+

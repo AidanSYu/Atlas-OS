@@ -48,6 +48,31 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
+def _sanitize_state(state: dict) -> dict:
+    """Convert numpy/non-native numeric types to Python builtins.
+
+    LangGraph's MemorySaver serializes state via msgpack which chokes on
+    numpy.float32 / numpy.int64. This recursively walks the state dict and
+    converts any offending types so checkpointing never fails.
+    """
+    import numpy as _np
+
+    def _convert(obj):
+        if isinstance(obj, dict):
+            return {k: _convert(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_convert(v) for v in obj]
+        if isinstance(obj, (_np.floating,)):
+            return float(obj)
+        if isinstance(obj, (_np.integer,)):
+            return int(obj)
+        if isinstance(obj, _np.ndarray):
+            return obj.tolist()
+        return obj
+
+    return _convert(state)
+
+
 # ============================================================
 # JSON SCHEMAS FOR CONSTRAINED GENERATION (Atlas 3.0 Task 0.4)
 # ============================================================
@@ -820,7 +845,7 @@ Return your analysis as JSON:
                         **payload.get("metadata", {}),
                         "chunk_id": str(r.id),
                     },
-                    "score": r.score,
+                    "score": float(r.score),
                     "doc_id": payload.get("doc_id", ""),
                 })
         
@@ -867,13 +892,13 @@ Return your analysis as JSON:
         history = list(state.get("retrieval_history", []))
         history.extend(search_queries)
 
-        return {
+        return _sanitize_state({
             **state,
             "chunks": all_chunks,
             "retrieval_round": round_num,
             "retrieval_history": history,
             "reasoning_trace": trace,
-        }
+        })
 
     async def reasoner_node(state: NavigatorState) -> NavigatorState:
         """Generate hypothesis with explicit chain-of-thought (DeepSeek R1 style, enhanced in A3)."""
@@ -958,9 +983,11 @@ CRITICAL: If evidence is insufficient, explicitly state "I cannot find sufficien
                 max_retries=settings.MAX_VALIDATION_RETRIES if hasattr(settings, 'MAX_VALIDATION_RETRIES') else 2,
             )
 
-            # Extract structured parts
+            # Extract structured parts (fall back to raw text if XML missing)
             thinking = extract_xml_tag(response, "thinking")
             hypothesis = extract_xml_tag(response, "hypothesis")
+            if not hypothesis:
+                hypothesis = response.strip()
             evidence_map = extract_xml_tag(response, "evidence_mapping")
             confidence_str = extract_xml_tag(response, "confidence")
 
@@ -1446,9 +1473,11 @@ Step 3: What's the clearest answer we can provide?
                     max_retries=settings.MAX_VALIDATION_RETRIES if hasattr(settings, 'MAX_VALIDATION_RETRIES') else 2,
                 )
 
-                # Extract structured parts
+                # Extract structured parts (fall back to raw text if XML missing)
                 thinking = extract_xml_tag(response, "thinking")
                 answer = extract_xml_tag(response, "answer")
+                if not answer:
+                    answer = response.strip()
                 confidence_str = extract_xml_tag(response, "confidence")
 
                 # Parse confidence
@@ -2070,6 +2099,7 @@ async def run_swarm_query(
     # Step 2: Dispatch to appropriate brain
     if intent == "SIMPLE":
         # Librarian for fast fact retrieval
+        brain_name = "librarian"
         logger.info("Using Librarian (fast fact retrieval)")
         initial_state: LibrarianState = {
             "query": query,
@@ -2192,17 +2222,282 @@ async def run_swarm_query(
     # In a real app, this would be a unique session_id passed from the frontend
     config = {"configurable": {"thread_id": project_id}}
     
-    final_state = await graph.ainvoke(initial_state, config=config)
+    final_state = await graph.ainvoke(
+        _sanitize_state(initial_state), config=config
+    )
 
     # Step 4: Build response (Navigator 2.0 includes additional fields)
+    conf = final_state.get("confidence_score")
     return {
         "brain_used": brain_name,
-        "hypothesis": final_state.get("final_answer") or final_state.get("hypothesis", ""),
-        "evidence": final_state.get("evidence", []),
+        "hypothesis": final_state.get("final_answer") or final_state.get("hypothesis") or final_state.get("answer", ""),
+        "evidence": final_state.get("evidence", []) or final_state.get("citations", []),
         "reasoning_trace": final_state.get("reasoning_trace", []),
         "status": final_state.get("status", "unknown"),
-        # Navigator 2.0 new fields (default to None for legacy brains)
-        "confidence_score": final_state.get("confidence_score"),
+        "confidence_score": float(conf) if conf is not None else None,
         "iterations": final_state.get("iteration_count"),
         "contradictions": final_state.get("identified_contradictions", []),
     }
+
+# ============================================================
+# STREAMING EXECUTION (Phase 2)
+# ============================================================
+
+def _get_progress_message(node_name: str) -> str:
+    """Human-readable progress messages for each node."""
+    messages = {
+        "planner": "Planning research strategy...",
+        "graph_explorer": "Exploring knowledge graph...",
+        "retriever": "Searching document library...",
+        "reasoner": "Synthesizing hypothesis...",
+        "critic": "Verifying claims against sources...",
+        "synthesizer": "Preparing final answer...",
+        "decomposer": "Breaking down the question...",
+        "executor": "Researching sub-questions...",
+        "cross_checker": "Cross-checking findings...",
+        "resolver": "Resolving contradictions...",
+        "retrieve": "Searching for relevant passages...",
+        "answer": "Generating answer...",
+        "librarian": "Retrieving facts...",
+    }
+    return messages.get(node_name, f"Processing: {node_name}...")
+
+async def run_swarm_query_streaming(
+    query: str,
+    project_id: str,
+    session_id: Optional[str],
+    graph_service: GraphService,
+    llm_service: LLMService,
+    qdrant_client: QdrantClient,
+    collection_name: str,
+):
+    """Streaming version of run_swarm_query.
+
+    Yields (event_type, event_data) tuples as the graph executes.
+    Uses LangGraph's astream_events() for node-level progress.
+    """
+    from app.core.config import settings
+    import uuid
+
+    # Step 1: Route
+    intent = await route_intent(query, llm_service)
+    
+    # Phase 1 cleanup: Ensure we use the best model for this intent
+    if hasattr(llm_service, "load_model"):
+        await ensure_optimal_model(intent, llm_service)
+
+    logger.info(f"Swarm router classified query as: {intent}")
+
+    # Map intent to brain name for the routing event
+    _intent_brain_map = {
+        "SIMPLE": "librarian",
+        "DEEP_DISCOVERY": "navigator",
+        "BROAD_RESEARCH": "cortex",
+        "MULTI_STEP": "cortex",
+    }
+    yield ("routing", {"brain": _intent_brain_map.get(intent, "navigator"), "intent": intent})
+
+    # Step 2: Dispatch to appropriate brain
+    if intent == "SIMPLE":
+        # Librarian for fast fact retrieval
+        logger.info("Using Librarian (fast fact retrieval)")
+        initial_state: LibrarianState = {
+            "query": query,
+            "project_id": project_id,
+            "brain": "librarian",
+            "chunks": [],
+            "answer": "",
+            "citations": [],
+            "confidence_score": 0.0,
+            "reasoning_trace": [f"Router: Classified as {intent}", "Using Librarian Agent"],
+            "status": "running"
+        }
+        sg = _build_librarian_graph(llm_service, qdrant_client, collection_name)
+        brain_name = "librarian"
+
+    elif intent == "DEEP_DISCOVERY":
+        brain_name = "navigator"
+
+        # Use Navigator 2.0 if reflection is enabled
+        if settings.ENABLE_NAVIGATOR_REFLECTION:
+            logger.info("Using Navigator 2.0 with reflection loops")
+            initial_state: NavigatorState = {
+                "query": query,
+                "project_id": project_id,
+                "brain": brain_name,
+                "reasoning_plan": "",
+                "identified_gaps": [],
+                "search_terms": [],
+                "graph_summary": "",
+                "key_paths": [],
+                "entity_clusters": [],
+                "chunks": [],
+                "retrieval_round": 1,
+                "retrieval_history": [],
+                "hypothesis": "",
+                "reasoning_trace": [f"Router: Classified as {intent}", "Navigator 2.0 with reflection enabled"],
+                "evidence_map": "",
+                "verification_result": "",
+                "identified_contradictions": [],
+                "confidence_score": 0.5,
+                "iteration_count": 0,
+                "final_answer": "",
+                "evidence": [],
+                "status": "running",
+            }
+            sg = _build_navigator_2_graph(graph_service, llm_service, qdrant_client, collection_name)
+        else:
+            # Legacy Navigator 1.0
+            logger.info("Using Navigator 1.0 (legacy mode)")
+            initial_state: SwarmState = {
+                "query": query,
+                "project_id": project_id,
+                "brain": brain_name,
+                "subgraph_summary": "",
+                "chunks": [],
+                "hypothesis": "",
+                "sub_tasks": [],
+                "sub_results": [],
+                "cortex_summary": "",
+                "evidence": [],
+                "reasoning_trace": [f"Router: Classified as {intent}"],
+                "status": "running",
+            }
+            sg = _build_navigator_graph(graph_service, llm_service, qdrant_client, collection_name)
+    else:
+        # Cortex for BROAD_RESEARCH or MULTI_STEP
+        brain_name = "cortex"
+        
+        trace_note = "Cortex 2.0 with cross-checking enabled"
+        if intent == "MULTI_STEP":
+            trace_note += " (handling MULTI_STEP query via broad decomposition)"
+
+        if settings.ENABLE_CORTEX_CROSSCHECK:
+            logger.info("Using Cortex 2.0 with cross-checking")
+            initial_state: CortexState = {
+                "query": query,
+                "project_id": project_id,
+                "brain": brain_name,
+                "aspects": [],
+                "sub_tasks": [],
+                "task_coverage_check": "",
+                "sub_results": [],
+                "contradictions": [],
+                "coverage_gaps": [],
+                "verification_result": "",
+                "resolutions": [],
+                "hypothesis": "",
+                "reasoning_trace": [f"Router: Classified as {intent}", trace_note],
+                "evidence": [],
+                "confidence_score": 0.5,
+                "status": "running",
+            }
+            sg = _build_cortex_2_graph(llm_service, qdrant_client, collection_name)
+        else:
+            # Fallback Cortex 1.0
+            initial_state: SwarmState = {
+                "query": query,
+                "project_id": project_id,
+                "brain": brain_name,
+                "subgraph_summary": "",
+                "chunks": [],
+                "hypothesis": "",
+                "sub_tasks": [],
+                "sub_results": [],
+                "cortex_summary": "",
+                "evidence": [],
+                "reasoning_trace": [f"Router: Classified as {intent}"],
+                "status": "running",
+            }
+            sg = _build_cortex_graph(llm_service, qdrant_client, collection_name)
+
+    # Compile with memory
+    memory = await get_memory_saver()
+    compiled = sg.compile(checkpointer=memory)
+    
+    # Use session_id or generate new one
+    thread_id = session_id or str(uuid.uuid4())
+    config = {"configurable": {"thread_id": thread_id}}
+
+    # Step 3: Stream Execution
+    async for event in compiled.astream_events(_sanitize_state(initial_state), config=config, version="v2"):
+        kind = event["event"]
+        
+        if kind == "on_chain_start":
+            node_name = event.get("name", "")
+            # Filter out internal/wrapper nodes
+            if node_name and node_name in ["navigator", "analyst", "synthesizer", "planner", 
+                                          "retriever", "reasoner", "critic", "decomposer", 
+                                          "executor", "cross_checker", "resolver", "librarian"]:
+                yield ("progress", {
+                    "node": node_name,
+                    "message": _get_progress_message(node_name)
+                })
+
+        elif kind == "on_chain_end":
+            node_name = event.get("name", "")
+            output = event.get("data", {}).get("output", {})
+            
+            # If output is not a dict (e.g. string output from LLM directly), skip trace extraction
+            if not isinstance(output, dict):
+                continue
+
+            # Emit reasoning trace updates
+            trace = output.get("reasoning_trace", [])
+            if trace:
+                yield ("thinking", {"content": trace[-1] if trace else ""})
+
+            # Emit evidence as it's found
+            evidence = output.get("evidence", [])
+            if evidence:
+                # Avoid re-emitting same evidence multiple times if possible, 
+                # but for SSE simple approach is okay. Frontend can dedupe.
+                yield ("evidence", {"items": evidence, "count": len(evidence)})
+                
+            # Grounding events? 
+
+            # If verification_result is present, emit it
+            if "verification_result" in output:
+                yield ("grounding", {
+                    "status": output["verification_result"],
+                    "issues": output.get("identified_gaps", []) + output.get("identified_contradictions", [])
+                })
+
+            # Task 2.4: Real-Time Graph Updates
+            # Emit graph context if available (from Navigator)
+            if node_name in ["navigator", "graph_explorer"]:
+                # Check for various graph-related fields
+                graph_data = {}
+                if "subgraph_summary" in output:
+                    graph_data["summary"] = output["subgraph_summary"]
+                if "key_paths" in output and output["key_paths"]:
+                    graph_data["paths"] = output["key_paths"]
+                if "entity_clusters" in output and output["entity_clusters"]:
+                    graph_data["clusters"] = output["entity_clusters"]
+                
+                # Navigator 1.0 specific
+                if "subgraph_nodes" in output: # if we ever added this
+                     graph_data["nodes"] = output["subgraph_nodes"]
+
+                if graph_data:
+                    yield ("graph_analysis", graph_data)
+
+    # Step 4: Emit Final Result
+    # We need to fetch the final state to get the complete answer
+    final_snapshot = await compiled.aget(config)
+    final_state = final_snapshot.values if final_snapshot else {}
+    
+    # If final_state is empty (graph failed?), try to use initial_state updated? 
+    # astream_events doesn't return the final state directly.
+    # But checking snapshot is reliable.
+    
+    conf = final_state.get("confidence_score")
+    yield ("complete", {
+        "hypothesis": final_state.get("final_answer") or final_state.get("hypothesis") or final_state.get("answer", ""),
+        "evidence": final_state.get("evidence", []) or final_state.get("citations", []),
+        "confidence_score": float(conf) if conf is not None else None,
+        "reasoning_trace": final_state.get("reasoning_trace", []),
+        "brain_used": brain_name,
+        "status": final_state.get("status", "completed"),
+        "session_id": thread_id
+    })

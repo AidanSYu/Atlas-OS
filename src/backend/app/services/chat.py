@@ -55,8 +55,8 @@ class ChatService:
         for edge in graph_edges[:10]:
             relationships.append(
                 {
-                    "source_id": edge.get("source_id", ""),
-                    "target_id": edge.get("target_id", ""),
+                    "source": edge.get("source_id", ""),
+                    "target": edge.get("target_id", ""),
                     "type": edge.get("type", ""),
                     "properties": edge.get("properties", {}),
                 }

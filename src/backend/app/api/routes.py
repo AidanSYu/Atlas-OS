@@ -22,13 +22,14 @@ chat_service = None
 ingestion_service = None
 document_service = None
 graph_service = None
+context_engine_service = None
 
 logger = logging.getLogger(__name__)
 
 
 def ensure_services():
     """Initialize services - FATAL on failure."""
-    global chat_service, ingestion_service, document_service, graph_service
+    global chat_service, ingestion_service, document_service, graph_service, context_engine_service
 
     if document_service is None:
         document_service = DocumentService()
@@ -42,6 +43,10 @@ def ensure_services():
     if ingestion_service is None:
         ingestion_service = IngestionService()
         logger.info("IngestionService initialized")
+    if context_engine_service is None:
+        from app.services.context_engine import ContextEngineService
+        context_engine_service = ContextEngineService()
+        logger.info("ContextEngineService initialized")
 
 
 # ============================================================
@@ -81,7 +86,7 @@ class SwarmRequest(BaseModel):
 class SwarmStreamRequest(BaseModel):
     project_id: str
     query: str
-    session_id: Optional[str] = None  # For memory persistence
+    session_id: Optional[str] = None
 
 
 class SwarmResponse(BaseModel):
@@ -106,6 +111,13 @@ class ModelLoadResponse(BaseModel):
     device: str
     gpu_layers: int
     fallback: bool
+
+
+class ContextRequest(BaseModel):
+    project_id: str
+    selected_text: Optional[str] = None
+    current_doc_id: Optional[str] = None
+    current_page: Optional[int] = None
 
 
 # ============================================================
@@ -529,6 +541,56 @@ async def get_full_graph(
 # SWARM (Two-Brain Agentic RAG)
 # ============================================================
 
+@router.post("/api/swarm/stream")
+async def stream_swarm(request: SwarmStreamRequest):
+    """Stream swarm execution via Server-Sent Events.
+
+    Event types:
+      - routing:  {"brain": "navigator", "intent": "DEEP_DISCOVERY"}
+      - progress: {"node": "planner", "message": "Planning research strategy..."}
+      - thinking: {"content": "Step 1: Analyzing the query..."}
+      - chunk:    {"content": "partial answer text"}  (token streaming)
+      - evidence: {"source": "file.pdf", "page": 5, "excerpt": "..."}
+      - grounding: {"claim": "...", "status": "GROUNDED", "confidence": 0.9}
+      - complete: {"hypothesis": "full answer", "confidence": 0.85, ...}
+      - error:    {"message": "..."}
+    """
+    ensure_services()
+    if chat_service is None or graph_service is None:
+        raise HTTPException(status_code=503, detail="Services not initialized. Check backend logs.")
+
+    async def event_generator():
+        try:
+            # Lazy import to avoid circular dependencies and allow partial implementation
+            # Task 2.2: Add Streaming to Swarm Execution
+            from app.services.swarm import run_swarm_query_streaming
+
+            async for event_type, event_data in run_swarm_query_streaming(
+                query=request.query,
+                project_id=request.project_id,
+                session_id=request.session_id,
+                graph_service=graph_service,
+                llm_service=chat_service.retrieval_service.llm_service,
+                qdrant_client=chat_service.retrieval_service.qdrant_client,
+                collection_name=chat_service.retrieval_service.collection_name,
+            ):
+                # SSE format: "event: type\ndata: json\n\n"
+                yield f"event: {event_type}\ndata: {json.dumps(event_data)}\n\n"
+        except Exception as e:
+            logger.error(f"Streaming error: {e}", exc_info=True)
+            yield f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.post("/api/swarm/run", response_model=SwarmResponse)
 async def run_swarm(request: SwarmRequest):
     """Run the Two-Brain Swarm on a query within a project.
@@ -537,6 +599,8 @@ async def run_swarm(request: SwarmRequest):
     BROAD_RESEARCH (Cortex) and dispatches accordingly.
     """
     ensure_services()
+    if chat_service is None or graph_service is None:
+        raise HTTPException(status_code=503, detail="Services not initialized. Check backend logs.")
     try:
         from app.services.swarm import run_swarm_query
 
@@ -552,3 +616,268 @@ async def run_swarm(request: SwarmRequest):
     except Exception as e:
         logger.exception("Swarm execution failed")
         raise HTTPException(status_code=500, detail=f"Swarm error: {str(e)}")
+
+
+# ============================================================
+# CONTEXT ENGINE (Phase 4: Smart Reading & Context)
+# ============================================================
+
+@router.get("/files/{doc_id}/structure")
+async def get_document_structure(doc_id: str):
+    """Get extracted paper structure (title, authors, methods, findings)."""
+    ensure_services()
+    if context_engine_service is None:
+        raise HTTPException(status_code=503, detail="Context engine unavailable")
+    try:
+        result = await context_engine_service.get_document_structure(doc_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Document not found")
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting document structure: {str(e)}")
+
+
+@router.get("/files/{doc_id}/related")
+async def get_related_passages(
+    doc_id: str,
+    text: str = Query(..., min_length=3),
+    project_id: Optional[str] = Query(None),
+    limit: int = Query(8, ge=1, le=20),
+):
+    """Find passages in other documents related to selected text."""
+    ensure_services()
+    if context_engine_service is None:
+        raise HTTPException(status_code=503, detail="Context engine unavailable")
+    try:
+        return await context_engine_service.get_related_passages(
+            doc_id=doc_id, text=text, project_id=project_id, limit=limit
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error finding related passages: {str(e)}")
+
+
+@router.get("/files/{doc_id}/chunks")
+async def get_document_chunks(
+    doc_id: str,
+    page: Optional[int] = Query(None, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+):
+    """Get chunks for a document, optionally filtered by page number."""
+    ensure_services()
+    if context_engine_service is None:
+        raise HTTPException(status_code=503, detail="Context engine unavailable")
+    try:
+        return await context_engine_service.get_document_chunks(
+            doc_id=doc_id, page_number=page, limit=limit
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting document chunks: {str(e)}")
+
+
+@router.post("/api/context")
+async def get_context_suggestions(request: ContextRequest):
+    """Get context-aware suggestions based on user's current focus.
+
+    Accepts a context snapshot (selected text, current document/page)
+    and returns related passages, connected entities, and suggestions.
+    """
+    ensure_services()
+    if context_engine_service is None:
+        raise HTTPException(status_code=503, detail="Context engine unavailable")
+    try:
+        return await context_engine_service.get_context_suggestions(
+            project_id=request.project_id,
+            selected_text=request.selected_text,
+            current_doc_id=request.current_doc_id,
+            current_page=request.current_page,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting context suggestions: {str(e)}")
+
+
+# ============================================================
+# IMPORT / EXPORT (Phase 5)
+# ============================================================
+
+class ExportMarkdownRequest(BaseModel):
+    content: str
+    citations: List[Dict[str, Any]] = []
+    project_id: str
+    title: str = "Research Synthesis"
+    author: str = ""
+    style: str = "apa"  # apa, mla, chicago
+
+
+class ExportChatRequest(BaseModel):
+    messages: List[Dict[str, Any]]
+    project_name: str = "Atlas Research"
+
+
+class FormatCitationRequest(BaseModel):
+    doc_ids: List[str]
+    style: str = "apa"
+
+
+@router.post("/import/bibtex")
+async def import_bibtex(
+    file: UploadFile = File(...),
+    project_id: str = Query(...),
+):
+    """Import papers from a BibTeX (.bib) or RIS (.ris) file.
+
+    Creates Document records with status='metadata_only' for each entry.
+    PDFs can be attached to these records later via the ingest endpoint.
+    """
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Filename is required")
+
+    filename_lower = file.filename.lower()
+    content = (await file.read()).decode("utf-8", errors="replace")
+
+    try:
+        if filename_lower.endswith(".bib"):
+            from app.services.importers.bibtex import BibTeXImporter
+            importer = BibTeXImporter()
+            result = importer.import_from_string(content, project_id)
+        elif filename_lower.endswith(".ris"):
+            from app.services.importers.bibtex import RISImporter
+            importer = RISImporter()
+            result = importer.import_from_string(content, project_id)
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Unsupported format. Use .bib (BibTeX) or .ris (RIS).",
+            )
+
+        if result.get("status") == "failed":
+            raise HTTPException(status_code=500, detail=result.get("error", "Import failed"))
+
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Import error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Import error: {str(e)}")
+
+
+@router.get("/export/bibtex/{project_id}")
+async def export_bibtex(project_id: str):
+    """Export all project citations as a BibTeX (.bib) file."""
+    try:
+        from app.services.exporters.bibtex import BibTeXExporter
+        exporter = BibTeXExporter()
+        bib_content = exporter.export_project(project_id)
+
+        if not bib_content:
+            return {"status": "empty", "message": "No documents with metadata found in this project"}
+
+        return StreamingResponse(
+            iter([bib_content]),
+            media_type="application/x-bibtex",
+            headers={
+                "Content-Disposition": f'attachment; filename="atlas-{project_id[:8]}.bib"',
+            },
+        )
+    except Exception as e:
+        logger.error(f"BibTeX export error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Export error: {str(e)}")
+
+
+@router.post("/export/bibtex")
+async def export_bibtex_selection(body: FormatCitationRequest):
+    """Export specific documents as BibTeX entries."""
+    try:
+        from app.services.exporters.bibtex import BibTeXExporter
+        exporter = BibTeXExporter()
+        bib_content = exporter.export_documents(body.doc_ids)
+
+        if not bib_content:
+            return {"status": "empty", "message": "No documents found for the given IDs"}
+
+        return StreamingResponse(
+            iter([bib_content]),
+            media_type="application/x-bibtex",
+            headers={
+                "Content-Disposition": 'attachment; filename="atlas-selection.bib"',
+            },
+        )
+    except Exception as e:
+        logger.error(f"BibTeX export error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Export error: {str(e)}")
+
+
+@router.post("/export/markdown")
+async def export_markdown(body: ExportMarkdownRequest):
+    """Export synthesis as Pandoc-compatible Markdown.
+
+    Returns a JSON object with:
+    - markdown: The full Markdown document with YAML front matter
+    - bibtex: Companion .bib file content for Pandoc
+    - filename: Suggested filename (without extension)
+    """
+    try:
+        from app.services.exporters.markdown import MarkdownExporter
+        exporter = MarkdownExporter()
+        result = exporter.export_synthesis(
+            content=body.content,
+            citations=body.citations,
+            project_id=body.project_id,
+            title=body.title,
+            author=body.author,
+            style=body.style,
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Markdown export error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Export error: {str(e)}")
+
+
+@router.post("/export/chat")
+async def export_chat_history(body: ExportChatRequest):
+    """Export a chat conversation as Markdown."""
+    try:
+        from app.services.exporters.markdown import MarkdownExporter
+        exporter = MarkdownExporter()
+        md_content = exporter.export_chat_history(
+            messages=body.messages,
+            project_name=body.project_name,
+        )
+        return {"markdown": md_content}
+    except Exception as e:
+        logger.error(f"Chat export error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Export error: {str(e)}")
+
+
+@router.post("/export/citations/format")
+async def format_citations(body: FormatCitationRequest):
+    """Format citations for specific documents in a given style (APA/MLA/Chicago)."""
+    try:
+        from app.core.database import get_session, Document as DocModel
+        from app.services.exporters.bibtex import BibTeXExporter
+
+        exporter = BibTeXExporter()
+        session = get_session()
+        try:
+            documents = (
+                session.query(DocModel)
+                .filter(DocModel.id.in_(body.doc_ids))
+                .all()
+            )
+            formatted = []
+            for doc in documents:
+                meta = doc.doc_metadata or {}
+                citation = exporter.format_citation(meta, body.style)
+                formatted.append({
+                    "doc_id": doc.id,
+                    "filename": doc.filename,
+                    "citation": citation,
+                    "bibtex_key": meta.get("bibtex_key", ""),
+                })
+            return {"citations": formatted, "style": body.style}
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error(f"Citation format error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Format error: {str(e)}")

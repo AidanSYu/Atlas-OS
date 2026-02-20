@@ -82,12 +82,14 @@ class RerankService:
                 original_idx = r["id"]
                 original_doc = documents[original_idx]
 
-                # Preserve relevance_score key for downstream compatibility
+                # Convert numpy floats to Python float for JSON/msgpack serialization
+                score = float(r["score"])
+                orig = original_doc.get("relevance_score", original_doc.get("score"))
                 reranked_docs.append({
                     **original_doc,
-                    "relevance_score": r["score"],
-                    "rerank_score": r["score"],
-                    "original_score": original_doc.get("relevance_score", original_doc.get("score"))
+                    "relevance_score": score,
+                    "rerank_score": score,
+                    "original_score": float(orig) if orig is not None else None,
                 })
 
             # Sort by relevance_score

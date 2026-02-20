@@ -1,0 +1,276 @@
+"""
+Context Engine - Proactive context-aware retrieval service.
+
+Phase 4, Task 4.4: Receives user's current context (selected text,
+active document, current page) and returns relevant passages,
+connected concepts, and suggestions from the knowledge graph.
+"""
+from typing import Any, Dict, List, Optional
+import logging
+
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from app.core.database import get_session, Document, DocumentChunk, Node, Edge
+from app.core.config import settings
+from app.services.llm import LLMService
+from app.core.qdrant_store import get_qdrant_client
+from app.services.rerank import get_rerank_service
+from qdrant_client.models import Filter, FieldCondition, MatchValue
+
+logger = logging.getLogger(__name__)
+
+
+class ContextEngineService:
+    """Proactive context-aware retrieval.
+
+    Accepts a "context snapshot" from the frontend and returns relevant
+    passages, connected entities, and suggestions.
+    """
+
+    def __init__(self):
+        self.llm_service = LLMService.get_instance()
+        self.qdrant_client = get_qdrant_client()
+        self.collection_name = settings.QDRANT_COLLECTION
+        self.reranker = get_rerank_service()
+        logger.info("ContextEngineService initialized")
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    async def get_document_structure(self, doc_id: str) -> Optional[Dict[str, Any]]:
+        """Get extracted paper structure (title, authors, methods, findings).
+
+        Returns the doc_metadata field from the Document record.
+        """
+        session = get_session()
+        try:
+            document = session.query(Document).filter(Document.id == doc_id).first()
+            if not document:
+                return None
+
+            metadata = document.doc_metadata or {}
+            return {
+                "doc_id": doc_id,
+                "filename": document.filename,
+                "status": document.status,
+                "uploaded_at": document.uploaded_at.isoformat() if document.uploaded_at else None,
+                "structure": {
+                    "title": metadata.get("title", document.filename),
+                    "authors": metadata.get("authors", []),
+                    "year": metadata.get("year"),
+                    "abstract": metadata.get("abstract", ""),
+                    "methodology": metadata.get("methodology", ""),
+                    "key_findings": metadata.get("key_findings", []),
+                    "limitations": metadata.get("limitations", []),
+                    "paper_type": metadata.get("paper_type", "other"),
+                    "page_count": metadata.get("page_count", 0),
+                    "total_chars": metadata.get("total_chars", 0),
+                },
+            }
+        finally:
+            session.close()
+
+    async def get_related_passages(
+        self,
+        doc_id: str,
+        text: str,
+        project_id: Optional[str] = None,
+        limit: int = 8,
+    ) -> List[Dict[str, Any]]:
+        """Find passages in OTHER documents related to the given text.
+
+        Embeds the input text and searches Qdrant, excluding chunks
+        from the specified document.
+        """
+        embedding = await self.llm_service.embed(text)
+
+        # Build filter to exclude the source document
+        must_not = [FieldCondition(key="doc_id", match=MatchValue(value=doc_id))]
+        search_filter = Filter(must_not=must_not)
+
+        results = self.qdrant_client.query_points(
+            collection_name=self.collection_name,
+            query=embedding,
+            query_filter=search_filter,
+            limit=limit * 2,  # Fetch extra for reranking
+        ).points
+
+        passages = []
+        for r in results:
+            payload = r.payload or {}
+            meta = payload.get("metadata", {})
+            passages.append({
+                "text": payload.get("text", "")[:500],
+                "source": meta.get("filename", "Unknown"),
+                "page": meta.get("page", 1),
+                "doc_id": payload.get("doc_id", ""),
+                "score": r.score,
+                "chunk_id": payload.get("chunk_id", ""),
+            })
+
+        # Rerank if available
+        if self.reranker and passages:
+            try:
+                passages = await self.reranker.rerank(
+                    query=text,
+                    documents=passages,
+                    top_n=limit,
+                )
+            except Exception as e:
+                logger.warning(f"Reranking failed in context engine: {e}")
+                passages = passages[:limit]
+        else:
+            passages = passages[:limit]
+
+        return passages
+
+    async def get_context_suggestions(
+        self,
+        project_id: str,
+        selected_text: Optional[str] = None,
+        current_doc_id: Optional[str] = None,
+        current_page: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Return context-aware suggestions based on user's current focus.
+
+        Combines related passages, connected entities, and AI suggestions.
+        """
+        results: Dict[str, Any] = {
+            "related_passages": [],
+            "connected_concepts": [],
+            "suggestions": [],
+        }
+
+        if selected_text and len(selected_text.strip()) > 10:
+            # Find similar passages in OTHER documents
+            results["related_passages"] = await self.get_related_passages(
+                doc_id=current_doc_id or "",
+                text=selected_text,
+                project_id=project_id,
+                limit=5,
+            )
+
+            # Find connected entities from the graph
+            results["connected_concepts"] = await self._find_connected_entities(
+                selected_text, project_id
+            )
+
+        elif current_doc_id and current_page:
+            # No text selected, but we know what page they're on —
+            # find the chunks on that page and use them for context
+            page_text = await self._get_page_text(current_doc_id, current_page)
+            if page_text:
+                results["related_passages"] = await self.get_related_passages(
+                    doc_id=current_doc_id,
+                    text=page_text[:500],
+                    project_id=project_id,
+                    limit=3,
+                )
+
+        return results
+
+    async def get_document_chunks(
+        self,
+        doc_id: str,
+        page_number: Optional[int] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """Get chunks for a document, optionally filtered by page."""
+        session = get_session()
+        try:
+            query = session.query(DocumentChunk).filter(
+                DocumentChunk.document_id == doc_id
+            )
+            if page_number is not None:
+                query = query.filter(DocumentChunk.page_number == page_number)
+
+            query = query.order_by(DocumentChunk.chunk_index).limit(limit)
+            chunks = query.all()
+
+            return [
+                {
+                    "chunk_id": c.id,
+                    "text": c.text,
+                    "chunk_index": c.chunk_index,
+                    "page_number": c.page_number,
+                    "start_char": c.start_char,
+                    "end_char": c.end_char,
+                    "metadata": c.chunk_metadata or {},
+                }
+                for c in chunks
+            ]
+        finally:
+            session.close()
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    async def _find_connected_entities(
+        self, text: str, project_id: str, limit: int = 10
+    ) -> List[Dict[str, Any]]:
+        """Find entities in the knowledge graph related to the given text."""
+        session = get_session()
+        try:
+            # Simple keyword matching: extract words > 3 chars and search nodes
+            words = set(
+                w.lower()
+                for w in text.split()
+                if len(w) > 3 and w.isalpha()
+            )
+
+            if not words:
+                return []
+
+            # Search for nodes whose name matches any keyword
+            node_query = session.query(Node).filter(
+                Node.project_id == project_id
+            )
+
+            matching_nodes = []
+            # Use SQL-level filtering for efficiency
+            for word in list(words)[:15]:  # Cap at 15 keywords
+                nodes = node_query.filter(
+                    func.lower(func.json_extract(Node.properties, "$.name")).contains(word)
+                ).limit(5).all()
+                matching_nodes.extend(nodes)
+
+            # Deduplicate
+            seen_ids = set()
+            unique_nodes = []
+            for node in matching_nodes:
+                if node.id not in seen_ids:
+                    seen_ids.add(node.id)
+                    props = node.properties or {}
+                    unique_nodes.append({
+                        "id": node.id,
+                        "name": props.get("name", ""),
+                        "type": node.label,
+                        "document_id": node.document_id,
+                        "confidence": props.get("confidence", 0.0),
+                    })
+
+            return unique_nodes[:limit]
+        finally:
+            session.close()
+
+    async def _get_page_text(self, doc_id: str, page_number: int) -> Optional[str]:
+        """Get concatenated text from all chunks on a given page."""
+        session = get_session()
+        try:
+            chunks = (
+                session.query(DocumentChunk)
+                .filter(
+                    DocumentChunk.document_id == doc_id,
+                    DocumentChunk.page_number == page_number,
+                )
+                .order_by(DocumentChunk.chunk_index)
+                .all()
+            )
+            if not chunks:
+                return None
+            return " ".join(c.text for c in chunks)
+        finally:
+            session.close()

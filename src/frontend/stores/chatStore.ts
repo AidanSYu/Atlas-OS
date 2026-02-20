@@ -27,6 +27,24 @@ export interface ChatMessage {
       excerpt: string;
       relevance: number;
     }>;
+    confidenceScore?: number;
+    iterations?: number;
+    contradictions?: Array<{
+      claim_a: string;
+      claim_b: string;
+      severity: 'HIGH' | 'LOW';
+      resolution?: string;
+    }>;
+  };
+  librarianMetadata?: {
+    reasoning?: string;
+    relationships?: Array<{
+      source: string;
+      type: string;
+      target: string;
+      context?: string;
+    }>;
+    contextSources?: any;
   };
   timestamp: number;
 }
@@ -35,14 +53,19 @@ interface ChatState {
   // Librarian (green) chat state
   librarianMessages: ChatMessage[];
   librarianInput: string;
-  
+  librarianSessionId: string;
+
   // Cortex (purple) chat state
   cortexMessages: ChatMessage[];
   cortexInput: string;
-  
+  cortexSessionId: string;
+
   // Current active project (for clearing on project change)
   activeProjectId: string | null;
-  
+
+  // Pending question (pre-filled from other views, e.g. "Ask about this page")
+  pendingQuestion: string | null;
+
   // Actions
   addLibrarianMessage: (message: Omit<ChatMessage, 'id' | 'timestamp'>) => void;
   addCortexMessage: (message: Omit<ChatMessage, 'id' | 'timestamp'>) => void;
@@ -52,6 +75,7 @@ interface ChatState {
   clearCortexChat: () => void;
   clearAllChats: () => void;
   setActiveProject: (projectId: string | null) => void;
+  setPendingQuestion: (question: string | null) => void;
 }
 
 const generateId = () => Math.random().toString(36).substring(2, 15);
@@ -77,9 +101,12 @@ export const useChatStore = create<ChatState>()(
       // Initial state
       librarianMessages: [LIBRARIAN_WELCOME],
       librarianInput: '',
+      librarianSessionId: crypto.randomUUID(),
       cortexMessages: [CORTEX_WELCOME],
       cortexInput: '',
+      cortexSessionId: crypto.randomUUID(),
       activeProjectId: null,
+      pendingQuestion: null,
 
       addLibrarianMessage: (message) =>
         set((state) => ({
@@ -124,9 +151,12 @@ export const useChatStore = create<ChatState>()(
             librarianInput: '',
             cortexMessages: [CORTEX_WELCOME],
             cortexInput: '',
+            pendingQuestion: null,
           });
         }
       },
+
+      setPendingQuestion: (question) => set({ pendingQuestion: question }),
     }),
     {
       name: 'atlas-chat-storage',
@@ -135,8 +165,10 @@ export const useChatStore = create<ChatState>()(
       partialize: (state) => ({
         librarianMessages: state.librarianMessages,
         librarianInput: state.librarianInput,
+        librarianSessionId: state.librarianSessionId,
         cortexMessages: state.cortexMessages,
         cortexInput: state.cortexInput,
+        cortexSessionId: state.cortexSessionId,
         activeProjectId: state.activeProjectId,
       }),
     }

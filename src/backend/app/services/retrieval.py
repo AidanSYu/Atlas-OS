@@ -241,7 +241,7 @@ If no dates/entities found, return empty arrays."""
                         "text": payload.get("text", ""),
                         "doc_id": payload.get("doc_id"),
                         "metadata": {**payload.get("metadata", {}), "chunk_id": chunk_id},
-                        "relevance_score": result.score,
+                        "relevance_score": float(result.score),
                         "match_type": "vector",
                     }
 

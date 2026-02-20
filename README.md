@@ -1,6 +1,8 @@
 # Atlas 2.0 - AI-Native Knowledge Desktop Application
 
 .\scripts\dev\run_backend.ps1
+python run_server.py
+
 npx tauri dev
 
 

@@ -3,6 +3,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { Upload, File, Trash2, Loader2 } from 'lucide-react';
 import { api, FileInfo } from '@/lib/api';
+import { toastError } from '@/stores/toastStore';
 
 interface FileSidebarProps {
   onFileSelect: (docId: string, filename: string) => void;
@@ -65,7 +66,7 @@ export default function FileSidebar({ onFileSelect, selectedDocId, projectId, on
       await api.uploadFile(file, projectId);
       await loadFiles();
     } catch (error) {
-      alert((error as Error).message);
+      toastError((error as Error).message);
     } finally {
       setUploading(false);
     }

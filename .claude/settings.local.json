@@ -4,7 +4,9 @@
       "Bash(python:*)",
       "Bash(npx tsc:*)",
       "Bash(curl:*)",
-      "Bash(pip index versions:*)"
+      "Bash(pip index versions:*)",
+      "Bash(npm install:*)",
+      "Bash(npx next build:*)"
     ]
   }
 }

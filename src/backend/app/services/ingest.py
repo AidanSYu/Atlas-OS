@@ -341,6 +341,24 @@ class IngestionService:
                 )
                 logger.info(f"Uploaded {len(all_points)} vectors to Qdrant ({len(vector_points)} chunks + {len(raptor_points)} RAPTOR)")
 
+            # 8.5: Extract paper structure metadata (Phase 4, Task 4.1)
+            try:
+                full_text = "\n".join(p["text"] for p in pages)
+                paper_structure = await self._extract_paper_structure(full_text, filename)
+                paper_structure["page_count"] = len(pages)
+                paper_structure["total_chars"] = sum(p.get("char_count", len(p["text"])) for p in pages)
+                document.doc_metadata = paper_structure
+                session.commit()
+                logger.info(f"Extracted paper structure for {filename}: title={paper_structure.get('title', 'N/A')}")
+            except Exception as e:
+                logger.warning(f"Paper structure extraction failed (non-fatal): {e}")
+                # Still store basic metadata even if LLM extraction fails
+                document.doc_metadata = {
+                    "page_count": len(pages),
+                    "total_chars": sum(p.get("char_count", len(p["text"])) for p in pages),
+                }
+                session.commit()
+
             # 9. Mark as completed
             document.status = "completed"
             document.processed_at = datetime.utcnow()
@@ -831,3 +849,95 @@ class IngestionService:
         except Exception as e:
             logger.error(f"GLiNER extraction failed: {str(e)}", exc_info=True)
             raise RuntimeError(f"GLiNER entity extraction failed: {str(e)}") from e
+
+    # ----------------------------------------------------------------
+    # Paper Structure Extraction (Phase 4, Task 4.1)
+    # ----------------------------------------------------------------
+
+    async def _extract_paper_structure(self, text: str, filename: str) -> Dict[str, Any]:
+        """Extract structured academic paper metadata using LLM.
+
+        Analyzes the first ~3000 chars of a document to extract title, authors,
+        year, abstract, methodology, key findings, and paper type.
+
+        Returns:
+            Dict with extracted metadata fields. Missing fields default to empty.
+        """
+        import re
+        import json as json_module
+
+        # Use first 3000 chars for structure extraction (covers most abstracts/intros)
+        sample = text[:3000]
+
+        prompt = f"""Extract the following from this academic paper/document. Return ONLY valid JSON, no other text.
+{{
+    "title": "paper title or document title",
+    "authors": ["author 1", "author 2"],
+    "year": 2024,
+    "abstract": "abstract text (first 500 chars max)",
+    "methodology": "brief description of methods used",
+    "key_findings": ["finding 1", "finding 2"],
+    "limitations": ["limitation 1"],
+    "paper_type": "empirical|review|theoretical|meta-analysis|report|other"
+}}
+
+If any field cannot be determined, use empty string or empty list.
+
+Document text (first 3000 chars):
+{sample}
+
+JSON:"""
+
+        response = await self.llm_service.generate(
+            prompt=prompt, temperature=0.1, max_tokens=1024
+        )
+
+        # Parse JSON from LLM response
+        result = self._parse_structure_response(response)
+
+        # Fallback: extract title from filename if LLM didn't get it
+        if not result.get("title"):
+            # Strip extension and clean up filename
+            name = Path(filename).stem
+            result["title"] = name.replace("_", " ").replace("-", " ").strip()
+
+        return result
+
+    @staticmethod
+    def _parse_structure_response(response: str) -> Dict[str, Any]:
+        """Parse JSON from LLM response, handling code blocks and malformed output."""
+        import re
+        import json as json_module
+
+        # Try direct JSON parse
+        text = response.strip()
+
+        # Strip markdown code blocks if present
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*\n?", "", text)
+            text = re.sub(r"\n?```\s*$", "", text)
+
+        try:
+            return json_module.loads(text)
+        except json_module.JSONDecodeError:
+            pass
+
+        # Try to find JSON object in the response
+        match = re.search(r"\{[\s\S]*\}", text)
+        if match:
+            try:
+                return json_module.loads(match.group())
+            except json_module.JSONDecodeError:
+                pass
+
+        # Return empty structure on complete failure
+        return {
+            "title": "",
+            "authors": [],
+            "year": None,
+            "abstract": "",
+            "methodology": "",
+            "key_findings": [],
+            "limitations": [],
+            "paper_type": "other",
+        }

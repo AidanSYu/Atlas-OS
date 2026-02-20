@@ -4,20 +4,59 @@
 
 :root,
 .dark {
-  --background: 0 0% 10%;
-  --foreground: 0 0% 93%;
-  --card: 0 0% 15%;
-  --surface: 0 0% 18%;
-  --border: 0 0% 20%;
-  --muted: 0 0% 16%;
-  --muted-foreground: 0 0% 65%;
-  --accent: 208 49% 58%;
-  --destructive: 0 62% 53%;
+  /* Atlas 3.0 - Deep Space Research OS Palette */
+  /* Backgrounds: deep navy-slate, not pure black */
+  --background: 222 28% 8%;
+  --foreground: 210 20% 93%;
+  --card: 220 25% 11%;
+  --surface: 218 22% 14%;
+  --border: 220 18% 18%;
+
+  /* Muted: blue-gray tones */
+  --muted: 220 20% 16%;
+  --muted-foreground: 215 15% 55%;
+
+  /* Primary: indigo-violet gradient anchor */
+  --primary: 245 58% 58%;
+  --primary-foreground: 0 0% 100%;
+
+  /* Accent: teal-cyan for interactive elements */
+  --accent: 174 62% 47%;
+  --accent-foreground: 180 10% 98%;
+
+  /* Semantic colors */
+  --success: 160 60% 45%;
+  --warning: 38 92% 50%;
+  --destructive: 0 72% 51%;
+  --info: 205 85% 55%;
+
+  /* Graph entity colors */
+  --entity-person: 217 80% 68%;
+  --entity-org: 168 55% 55%;
+  --entity-location: 270 60% 68%;
+  --entity-date: 38 75% 60%;
+  --entity-event: 350 65% 60%;
+  --entity-concept: 205 65% 58%;
+  --entity-document: 225 65% 60%;
+
+  /* Glow / accent overlay */
+  --glow: 245 100% 70%;
 }
 
 * {
   box-sizing: border-box;
   border-color: hsl(var(--border));
+}
+
+/* Typography Density - Professional Research Tool */
+html {
+  font-size: 13px;
+}
+
+@media (max-width: 768px) {
+  html {
+    font-size: 14px; /* Slightly larger on mobile */
+  }
 }
 
 html,
@@ -33,35 +72,208 @@ body {
   font-family: var(--font-inter), sans-serif;
 }
 
-h1,
-h2,
-h3,
-h4,
-h5,
-h6 {
+h1, h2, h3, h4, h5, h6 {
   font-family: var(--font-serif), serif;
   letter-spacing: -0.01em;
 }
 
+/* Atlas dot grid background texture */
 .atlas-dot-grid {
   background-image: radial-gradient(hsl(var(--border)) 0.7px, transparent 0.7px);
   background-size: 16px 16px;
 }
 
+/* Gradient text utility */
+.gradient-text {
+  background: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--accent)));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Subtle glow effects */
+.glow-sm {
+  box-shadow: 0 0 12px -3px hsl(var(--glow) / 0.15);
+}
+.glow-md {
+  box-shadow: 0 0 24px -4px hsl(var(--glow) / 0.2);
+}
+.glow-accent {
+  box-shadow: 0 0 16px -4px hsl(var(--accent) / 0.3);
+}
+
+/* Gradient border utility */
+.gradient-border {
+  position: relative;
+}
+.gradient-border::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, hsl(var(--primary) / 0.4), hsl(var(--accent) / 0.4));
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  -webkit-mask-composite: xor;
+  pointer-events: none;
+}
+
+/* Active tab indicator gradient */
+.tab-active {
+  position: relative;
+}
+.tab-active::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  background: linear-gradient(90deg, hsl(var(--primary)), hsl(var(--accent)));
+  border-radius: 2px;
+}
+
+/* Panel resize handles */
+.resize-handle {
+  transition: background-color 150ms ease;
+}
+.resize-handle:hover,
+.resize-handle[data-resize-handle-active] {
+  background-color: hsl(var(--accent) / 0.5) !important;
+}
+
+/* Scrollbar styling */
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
 }
-
 ::-webkit-scrollbar-track {
-  background: hsl(var(--background));
+  background: transparent;
 }
-
 ::-webkit-scrollbar-thumb {
-  background: hsl(var(--surface));
-  border: 2px solid hsl(var(--background));
+  background: hsl(var(--muted));
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.4);
+  background-clip: padding-box;
 }
 
-::-webkit-scrollbar-thumb:hover {
+/* TipTap editor styles */
+.ProseMirror {
+  outline: none;
+  min-height: 200px;
+  padding: 1rem;
+}
+.ProseMirror p {
+  margin: 0.5em 0;
+}
+.ProseMirror h1, .ProseMirror h2, .ProseMirror h3 {
+  font-family: var(--font-serif), serif;
+  margin: 1em 0 0.5em;
+}
+.ProseMirror h1 { font-size: 1.5em; }
+.ProseMirror h2 { font-size: 1.25em; }
+.ProseMirror h3 { font-size: 1.1em; }
+.ProseMirror ul, .ProseMirror ol {
+  padding-left: 1.5em;
+  margin: 0.5em 0;
+}
+.ProseMirror blockquote {
+  border-left: 3px solid hsl(var(--primary) / 0.5);
+  padding-left: 1em;
+  margin: 0.5em 0;
+  color: hsl(var(--muted-foreground));
+}
+.ProseMirror code {
   background: hsl(var(--muted));
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.9em;
+}
+.ProseMirror pre {
+  background: hsl(var(--muted));
+  padding: 0.75em 1em;
+  border-radius: 6px;
+  overflow-x: auto;
+}
+.ProseMirror pre code {
+  background: none;
+  padding: 0;
+}
+.ProseMirror .is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: hsl(var(--muted-foreground));
+  pointer-events: none;
+  height: 0;
+}
+.ProseMirror mark {
+  background-color: hsl(var(--warning) / 0.3);
+  border-radius: 2px;
+  padding: 0 2px;
+}
+.ProseMirror a {
+  color: hsl(var(--accent));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* Pulse animation for streaming indicator */
+@keyframes pulse-glow {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+.animate-pulse-glow {
+  animation: pulse-glow 1.5s ease-in-out infinite;
+}
+
+/* Staggered bounce for loading dots */
+.delay-100 { animation-delay: 100ms; }
+.delay-200 { animation-delay: 200ms; }
+
+/* Toast animations */
+@keyframes slide-in-from-right {
+  from { transform: translateX(100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+.animate-in { animation: slide-in-from-right 0.3s ease-out; }
+.slide-in-from-right-5 { /* handled by keyframes above */ }
+.fade-in { /* handled by keyframes above */ }
+
+/* Command Palette (cmdk) Overrides */
+[cmdk-root] {
+  z-index: 200;
+}
+
+[cmdk-overlay] {
+  position: fixed;
+  inset: 0;
+  background-color: hsl(var(--background) / 0.5);
+  backdrop-filter: blur(4px);
+  z-index: 199;
+}
+
+[cmdk-group-heading] {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: hsl(var(--muted-foreground));
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+kbd {
+  display: inline-block;
+  padding: 0.125rem 0.375rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  border-radius: 0.25rem;
+  background-color: hsl(var(--muted));
+  color: hsl(var(--foreground));
+  border: 1px solid hsl(var(--border));
 }

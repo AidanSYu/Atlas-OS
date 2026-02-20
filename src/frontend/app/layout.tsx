@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import { Inter, JetBrains_Mono, Merriweather } from 'next/font/google'
 import './globals.css'
+import ToastContainer from '@/components/ToastContainer'
 
 const inter = Inter({ 
   subsets: ['latin'],
@@ -33,6 +34,7 @@ export default function RootLayout({
     <html lang="en" className={`dark ${inter.variable} ${jetbrainsMono.variable} ${merriweather.variable}`}>
       <body className={`${inter.className} dark bg-background text-foreground antialiased`}>
         {children}
+        <ToastContainer />
       </body>
     </html>
   )

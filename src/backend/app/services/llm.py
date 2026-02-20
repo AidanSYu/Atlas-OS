@@ -203,6 +203,8 @@ class LLMService:
         self._llm_last_error: Optional[str] = None
         # Lock to prevent concurrent model loading/switching
         self._model_lock = asyncio.Lock()
+        # Lock to prevent concurrent LLM inference (llama_cpp is NOT thread-safe)
+        self._llm_lock = threading.Lock()
         # Lock to prevent concurrent embedding generation (Nomic v1.5 race condition fix)
         self._embed_lock = threading.Lock()
         self._is_initializing = False
@@ -542,14 +544,15 @@ class LLMService:
         loop = asyncio.get_running_loop()
         
         def _generate():
-            output = self._llm(
-                prompt,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                stop=stop,
-                echo=False
-            )
-            return output["choices"][0]["text"].strip()
+            with self._llm_lock:
+                output = self._llm(
+                    prompt,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    stop=stop,
+                    echo=False
+                )
+                return output["choices"][0]["text"].strip()
         
         return await loop.run_in_executor(None, _generate)
 
@@ -603,15 +606,16 @@ class LLMService:
             else:
                 stop = ["<|eot_id|>", "<|end_of_text|>"]
 
-            output = self._llm(
-                prompt,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                stop=stop,
-                grammar=grammar,
-                echo=False,
-            )
-            return output["choices"][0]["text"].strip()
+            with self._llm_lock:
+                output = self._llm(
+                    prompt,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    stop=stop,
+                    grammar=grammar,
+                    echo=False,
+                )
+                return output["choices"][0]["text"].strip()
 
         raw = await loop.run_in_executor(None, _generate)
 

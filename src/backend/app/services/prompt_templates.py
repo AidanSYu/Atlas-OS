@@ -671,19 +671,25 @@ def validate_json_output(response: str, required_keys: list[str]) -> bool:
 def validate_reasoner_output(response: str) -> bool:
     """Validate Navigator/Cortex reasoner output format.
 
-    Only requires <hypothesis> tag — small LLMs often omit <thinking>
-    and <confidence>. extract_xml_tag handles missing tags gracefully.
+    Accepts EITHER proper <hypothesis> XML tags OR any substantive text
+    (50+ chars). Small local LLMs often produce good content without
+    XML wrappers; the downstream extract_xml_tag handles missing tags
+    gracefully, so we avoid burning GPU time on pointless retries.
     """
-    return validate_xml_output(response, ["hypothesis"])
+    if validate_xml_output(response, ["hypothesis"]):
+        return True
+    return len(response.strip()) >= 50
 
 
 def validate_executor_output(response: str) -> bool:
     """Validate Cortex executor output format.
 
-    Only requires <answer> tag — small LLMs often omit <thinking> and
-    <confidence> tags. extract_xml_tag handles missing tags gracefully.
+    Accepts EITHER proper <answer> XML tags OR any substantive text.
+    Same lenient approach as the reasoner validator.
     """
-    return validate_xml_output(response, ["answer"])
+    if validate_xml_output(response, ["answer"]):
+        return True
+    return len(response.strip()) >= 50
 
 
 def validate_planner_output(response: str) -> bool:
