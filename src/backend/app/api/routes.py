@@ -798,6 +798,31 @@ async def stream_swarm(body: SwarmStreamRequest, request: Request):
         },
     )
 
+# ============================================================
+# CONTEXT ENGINE
+# ============================================================
+
+@router.post("/api/context")
+async def get_context_suggestions(request: ContextRequest):
+    """Proactively generate context suggestions based on user reading state."""
+    ensure_services()
+    if context_engine_service is None:
+        raise HTTPException(status_code=503, detail="Context engine service unavailable")
+
+    try:
+        # Pass the context state to the engine
+        suggestions = await context_engine_service.get_context_suggestions(
+            project_id=request.project_id,
+            selected_text=request.selected_text,
+            current_doc_id=request.current_doc_id,
+            current_page=request.current_page
+        )
+        return {"status": "success", "suggestions": suggestions}
+    except Exception as e:
+        logger.error(f"Context engine error: {e}")
+        # Return empty rather than failing hard, as this is a background feature
+        return {"status": "error", "suggestions": []}
+
 
 @router.post("/api/swarm/run", response_model=SwarmResponse)
 async def run_swarm(request: SwarmRequest):

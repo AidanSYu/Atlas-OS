@@ -1,10 +1,10 @@
-# Atlas 2.0 - AI-Native Knowledge Desktop Application
+# Atlas - AI-Native Knowledge Desktop Application
 
 > **The AI does not know things. It queries a living knowledge substrate... and reasons over it automatically.**
 
-Atlas 2.0 is a **standalone Windows desktop application** that builds a continuous knowledge layer beneath an AI model. This is not a chatbot—it's a scalable, explainable, open-source **Agentic Research Assistant** optimized for retrieval, relationships, and multi-turn reasoning over your personal documents.
+Atlas is a **standalone Windows desktop application** that builds a continuous knowledge layer beneath an AI model. This is not a chatbot—it's a scalable, explainable, open-source **Agentic Research Assistant** optimized for retrieval, relationships, and multi-turn reasoning over your personal documents.
 
-**New in 2.0:** Fully self-contained desktop app powered by a **Multi-Agent LangGraph Architecture**. All components are bundled: PostgreSQL, Qdrant vector database, Rustworkx knowledge graph, and Python backend run as secure local processes.
+Fully self-contained desktop app powered by a **Multi-Agent LangGraph Architecture**. All components are bundled: Qdrant vector database, Rustworkx knowledge graph, and Python backend run as secure local processes.
 
 ---
 
@@ -26,7 +26,7 @@ Atlas 2.0 is a **standalone Windows desktop application** that builds a continuo
 ### For Users: Install the Application
 
 1. **Download** the latest installer from [Releases](https://github.com/[your-repo]/releases)
-   - `Atlas_2.0.0_x64_en-US.msi` (Windows Installer) - Recommended
+   - `Atlas_x64_en-US.msi` (Windows Installer) - Recommended
 
 2. **Run** the installer and follow the setup wizard.
 3. **Launch** Atlas from your Start Menu or Desktop shortcut.
@@ -97,7 +97,7 @@ Atlas (Windows Application)
 ├── Frontend Layer (Next.js 14, React, Tailwind, TypeScript)
 ├── Tauri Shell (Rust core, Window/process management)
 └── Backend Layer (Python/FastAPI)
-    ├── PostgreSQL 16.1 & Qdrant v1.7.0 (Executables)
+    ├── Qdrant v1.7.0 (Executables)
     ├── Rustworkx Knowledge Graph engine
     ├── LangGraph Swarm (Agents)
     └── llama-cpp-python / PyTorch (Local Inference)
@@ -136,18 +136,14 @@ Atlas is explicitly engineered to wring maximum intelligence out of hardware-con
 
 ## 🔧 Configuration
 
-All configuration is automatic for the desktop app. For development, set in `backend/.env`:
+All configuration is automatic for the desktop app. For development, set in `src/backend/.env`:
 
 ```env
-# Database
-POSTGRES_HOST=127.0.0.1
-POSTGRES_PORT=5432
-POSTGRES_DB=atlas_knowledge
-POSTGRES_USER=atlas
+# Database (SQLite - automatic, no setup needed)
+DATABASE_URL=sqlite:///app.db
 
-# Vector Store
-QDRANT_HOST=127.0.0.1
-QDRANT_PORT=6333
+# Vector Store (Embedded Qdrant - automatic)
+QDRANT_STORAGE_PATH=./qdrant_data
 
 # Features
 ENABLE_OUTPUT_VALIDATION=true
@@ -172,7 +168,7 @@ MOE_MAX_EXPERT_ROUNDS=3
 - Fast, lightweight (~50MB), highly accurate token span predictor.
 
 **Changelog:**
-- **v2.0**: Massive Agentic Overhaul. Added LangGraph swarm (`Navigator 2.0`, `Cortex MoE`). Added `Rustworkx` for high-performance localized subgraph extraction. Emphasized local-first GBNF grammar constraints.
+- **v1.0**: Agentic architecture. LangGraph swarm (`Navigator 2.0`, `Cortex MoE`). `Rustworkx` for high-performance localized subgraph extraction. Local-first GBNF grammar constraints. SQLite-only backend.
 
 ---
 
@@ -192,5 +188,5 @@ This project is licensed under the MIT License - see the `LICENSE` file for deta
 ---
 
 **Last Updated:** February 2026  
-**Version:** 2.0.0  
+**Version:** 1.0.0  
 **Status:** Production Ready (Agentic Architecture Active) ✅

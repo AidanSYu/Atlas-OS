@@ -33,6 +33,7 @@ interface PDFViewerProps {
   initialPage?: number;
   onAskAboutPage?: (question: string) => void;
   onRelatedPassageClick?: (filename: string, page: number, docId?: string) => void;
+  onContextChange?: (selectedText?: string, docId?: string, pageNumber?: number) => void;
 }
 
 export default function PDFViewer({
@@ -43,6 +44,7 @@ export default function PDFViewer({
   initialPage = 1,
   onAskAboutPage,
   onRelatedPassageClick,
+  onContextChange,
 }: PDFViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [numPages, setNumPages] = useState<number>(0);
@@ -111,6 +113,13 @@ export default function PDFViewer({
     document.addEventListener('mouseup', handleSelection);
     return () => document.removeEventListener('mouseup', handleSelection);
   }, []);
+
+  // Report context changes
+  useEffect(() => {
+    if (onContextChange) {
+      onContextChange(selectedText, docId, pageNumber);
+    }
+  }, [selectedText, docId, pageNumber, onContextChange]);
 
   // Find related passages when text is selected
   const handleFindRelated = useCallback(async () => {
@@ -202,11 +211,10 @@ export default function PDFViewer({
                 setFitMode('fit');
                 setScale(1);
               }}
-              className={`inline-flex h-7 items-center justify-center border border-border px-2 text-xs transition-colors ${
-                fitMode === 'fit'
+              className={`inline-flex h-7 items-center justify-center border border-border px-2 text-xs transition-colors ${fitMode === 'fit'
                   ? 'bg-background text-foreground'
                   : 'bg-surface text-muted-foreground hover:bg-accent/15 hover:text-foreground'
-              }`}
+                }`}
             >
               Fit
             </button>
@@ -233,11 +241,10 @@ export default function PDFViewer({
             {docId && (
               <button
                 onClick={() => setSidebarOpen(!sidebarOpen)}
-                className={`inline-flex h-7 w-7 items-center justify-center border border-border transition-colors ${
-                  sidebarOpen
+                className={`inline-flex h-7 w-7 items-center justify-center border border-border transition-colors ${sidebarOpen
                     ? 'bg-primary/10 text-primary border-primary/30'
                     : 'bg-surface text-muted-foreground hover:bg-accent/15 hover:text-foreground'
-                }`}
+                  }`}
                 title={sidebarOpen ? 'Hide paper info' : 'Show paper info'}
               >
                 {sidebarOpen ? (

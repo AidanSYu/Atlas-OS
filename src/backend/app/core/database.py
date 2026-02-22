@@ -211,9 +211,11 @@ class DocumentChunk(Base):
 # ============================================================
 
 def _enable_sqlite_fks(dbapi_connection, connection_record):
-    """Enable foreign key enforcement on every SQLite connection."""
+    """Enable foreign key enforcement on every SQLite connection and optimize performance."""
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
     cursor.close()
 
 

@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     # Prompt Engineering Configuration (Phase A3)
     USE_PROMPT_TEMPLATES: bool = True      # Enable few-shot prompt templates
     ENABLE_OUTPUT_VALIDATION: bool = True  # Enable structured output validation with retries
-    MAX_VALIDATION_RETRIES: int = 2        # Max retries for malformed LLM outputs
+    MAX_VALIDATION_RETRIES: int = 1        # Max retries for malformed LLM outputs
 
     # RAG Optimization Configuration (Phase B)
     ENABLE_RERANKING: bool = True          # Enable FlashRank reranking

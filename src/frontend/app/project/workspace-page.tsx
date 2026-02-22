@@ -12,6 +12,7 @@ import ContextEngine from '@/components/ContextEngine';
 import { OmniBar } from '@/components/OmniBar';
 import { ResearchCanvas } from '@/components/ResearchCanvas';
 import { WelcomeTour } from '@/components/WelcomeTour';
+import { useContextEngine } from '@/hooks/useContextEngine';
 import { api, ModelStatusResponse, ModelRegistryResponse, ProjectInfo } from '@/lib/api';
 import { useChatStore } from '@/stores/chatStore';
 import { useGraphStore } from '@/stores/graphStore';
@@ -56,6 +57,8 @@ export default function ProjectWorkspacePage() {
 
   const { setActiveProject } = useChatStore();
   const { refreshGraph } = useGraphStore();
+
+  const { suggestions: contextSuggestions, isProcessing: contextProcessing, updateContext } = useContextEngine(projectId);
 
   const [currentProject, setCurrentProject] = useState<ProjectInfo | null>(null);
   const [loading, setLoading] = useState(true);
@@ -203,6 +206,7 @@ export default function ProjectWorkspacePage() {
     setSelectedFilename(filename);
     setPdfPage(1);
     setActiveView('document');
+    updateContext(undefined, docId, 1);
   };
 
   const handleFileDeleted = useCallback((docId: string) => {
@@ -216,6 +220,9 @@ export default function ProjectWorkspacePage() {
     if (docId) {
       setSelectedDocId(docId);
       setSelectedFilename(filename);
+      updateContext(undefined, docId, page);
+    } else {
+      updateContext(undefined, selectedDocId || undefined, page);
     }
     setPdfPage(page);
     setActiveView('document');
@@ -565,6 +572,7 @@ export default function ProjectWorkspacePage() {
                     initialPage={pdfPage}
                     onAskAboutPage={handleAskAboutPage}
                     onRelatedPassageClick={handleCitationClick}
+                    onContextChange={updateContext}
                   />
                 ) : (
                   <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
@@ -636,6 +644,8 @@ export default function ProjectWorkspacePage() {
                   selectedDocId={selectedDocId}
                   selectedFilename={selectedFilename}
                   onCitationClick={handleCitationClick}
+                  suggestions={contextSuggestions}
+                  isProcessing={contextProcessing}
                 />
               </div>
             </div>

@@ -214,6 +214,9 @@ class LLMService:
         self._embed_load_lock = threading.Lock()
         self._is_initializing = False
 
+        # Status tracking for background services
+        self._is_generating = False
+
         # Atlas 3.0: Hybrid LLM Layer - API model support
         self._model_source: str = "local"  # "local" or "api"
         self._api_model_name: Optional[str] = None  # e.g., "deepseek/deepseek-chat"
@@ -608,6 +611,11 @@ class LLMService:
         """Return the name of the currently loaded model."""
         return self._active_model_name
 
+    @property
+    def is_generating(self) -> bool:
+        """Return True if the LLM is actively generating text."""
+        return self._is_generating
+
     def list_available_models(self) -> List[str]:
         """List all .gguf models in the models directory."""
         if not self.models_dir.exists():
@@ -732,15 +740,19 @@ class LLMService:
         loop = asyncio.get_running_loop()
 
         def _generate():
-            with self._llm_lock:
-                output = self._llm(
-                    prompt,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    stop=stop,
-                    echo=False
-                )
-                return output["choices"][0]["text"].strip()
+            self._is_generating = True
+            try:
+                with self._llm_lock:
+                    output = self._llm(
+                        prompt,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        stop=stop,
+                        echo=False
+                    )
+                    return output["choices"][0]["text"].strip()
+            finally:
+                self._is_generating = False
 
         return await loop.run_in_executor(None, _generate)
 

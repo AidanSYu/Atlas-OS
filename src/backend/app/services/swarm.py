@@ -49,28 +49,12 @@ logger = logging.getLogger(__name__)
 
 
 def _sanitize_state(state: dict) -> dict:
-    """Convert numpy/non-native numeric types to Python builtins.
-
-    LangGraph's MemorySaver serializes state via msgpack which chokes on
-    numpy.float32 / numpy.int64. This recursively walks the state dict and
-    converts any offending types so checkpointing never fails.
+    """Pass-through state. 
+    
+    Qdrant floats and Numpy representations are now handled natively at the point of ingestion/retrieval 
+    instead of forcing a deep recursive walk over the entire StateGraph at each node transition.
     """
-    import numpy as _np
-
-    def _convert(obj):
-        if isinstance(obj, dict):
-            return {k: _convert(v) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [_convert(v) for v in obj]
-        if isinstance(obj, (_np.floating,)):
-            return float(obj)
-        if isinstance(obj, (_np.integer,)):
-            return int(obj)
-        if isinstance(obj, _np.ndarray):
-            return obj.tolist()
-        return obj
-
-    return _convert(state)
+    return state
 
 
 # ============================================================

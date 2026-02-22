@@ -127,6 +127,11 @@ class ContextEngineService:
         if not self._collection_exists():
             return []
 
+        # Skip proactive embedding generation if LLM is actively streaming
+        if getattr(self.llm_service, "is_generating", False):
+            logger.info("Skipping background embedding request due to active LLM generation loop.")
+            return []
+
         embedding = await self.llm_service.embed(text)
 
         # Build filter to exclude the source document

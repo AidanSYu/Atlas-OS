@@ -24,6 +24,8 @@ interface ContextEngineProps {
   selectedDocId: string | null;
   selectedFilename: string | null;
   onCitationClick: (filename: string, page: number, docId?: string) => void;
+  suggestions?: any;
+  isProcessing?: boolean;
 }
 
 export default function ContextEngine({
@@ -31,6 +33,8 @@ export default function ContextEngine({
   selectedDocId,
   selectedFilename,
   onCitationClick,
+  suggestions,
+  isProcessing,
 }: ContextEngineProps) {
   const { librarianMessages, cortexMessages } = useChatStore();
   const { selectedNodeId, nodes, links, focusedNodeId } = useGraphStore();
@@ -38,12 +42,11 @@ export default function ContextEngine({
   // Phase 4: Proactive context state
   const [docStructure, setDocStructure] = useState<DocumentStructureResponse | null>(null);
   const [structureLoading, setStructureLoading] = useState(false);
-  const [relatedPassages, setRelatedPassages] = useState<RelatedPassage[]>([]);
-  const [connectedConcepts, setConnectedConcepts] = useState<
-    Array<{ id: string; name: string; type: string; document_id: string; confidence: number }>
-  >([]);
-  const [contextLoading, setContextLoading] = useState(false);
   const lastFetchedDocId = useRef<string | null>(null);
+
+  const relatedPassages = suggestions?.related_passages || [];
+  const connectedConcepts = suggestions?.connected_concepts || [];
+  const contextLoading = isProcessing || false;
 
   // Fetch document structure when a new document is selected
   useEffect(() => {
@@ -67,41 +70,6 @@ export default function ContextEngine({
 
     return () => { cancelled = true; };
   }, [selectedDocId]);
-
-  // Fetch proactive context when document changes (debounced)
-  useEffect(() => {
-    if (!selectedDocId || !projectId) {
-      setRelatedPassages([]);
-      setConnectedConcepts([]);
-      return;
-    }
-
-    let cancelled = false;
-    const timer = setTimeout(async () => {
-      setContextLoading(true);
-      try {
-        const suggestions = await api.getContextSuggestions(
-          projectId,
-          undefined, // no selected text — page-based context
-          selectedDocId,
-          1, // current page
-        );
-        if (!cancelled) {
-          setRelatedPassages(suggestions.related_passages || []);
-          setConnectedConcepts(suggestions.connected_concepts || []);
-        }
-      } catch (err) {
-        console.error('Context suggestions failed:', err);
-      } finally {
-        if (!cancelled) setContextLoading(false);
-      }
-    }, 800); // Debounce
-
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [selectedDocId, projectId]);
 
   const allCitations = useMemo(() => {
     const citations: Array<{
@@ -268,7 +236,7 @@ export default function ContextEngine({
               Connected Concepts
             </div>
             <div className="flex flex-wrap gap-1.5">
-              {connectedConcepts.slice(0, 12).map((concept) => (
+              {connectedConcepts.slice(0, 12).map((concept: any) => (
                 <span
                   key={concept.id}
                   className="inline-flex items-center gap-1 rounded-full border border-border bg-surface px-2 py-0.5 text-[10px] text-foreground/70"
@@ -279,9 +247,9 @@ export default function ContextEngine({
                     style={{
                       backgroundColor:
                         concept.type === 'concept' ? 'var(--primary)' :
-                        concept.type === 'person' ? 'var(--accent)' :
-                        concept.type === 'method' ? '#10b981' :
-                        'var(--muted-foreground)',
+                          concept.type === 'person' ? 'var(--accent)' :
+                            concept.type === 'method' ? '#10b981' :
+                              'var(--muted-foreground)',
                     }}
                   />
                   {concept.name}
@@ -305,7 +273,7 @@ export default function ContextEngine({
               </div>
             ) : relatedPassages.length > 0 ? (
               <div className="space-y-1.5">
-                {relatedPassages.slice(0, 4).map((passage, i) => (
+                {relatedPassages.slice(0, 4).map((passage: any, i: number) => (
                   <button
                     key={`${passage.chunk_id}-${i}`}
                     onClick={() => onCitationClick(passage.source, passage.page, passage.doc_id)}
