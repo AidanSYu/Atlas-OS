@@ -1,94 +1,85 @@
 'use client';
 
-import React from 'react';
-import { Check, AlertTriangle, HelpCircle, Lightbulb } from 'lucide-react';
-
-export type GroundingStatus = 'GROUNDED' | 'SUPPORTED' | 'UNVERIFIED' | 'INFERRED';
+import { ShieldCheck, ShieldAlert, ShieldQuestion, Lightbulb } from 'lucide-react';
 
 interface ClaimBadgeProps {
-  status: GroundingStatus;
-  claim?: string;
+  status: 'GROUNDED' | 'SUPPORTED' | 'UNVERIFIED' | 'INFERRED';
+  claim: string;
   source?: string;
-  confidence?: number;
-  compact?: boolean;
   onClick?: () => void;
+  size?: 'sm' | 'md' | 'lg';
 }
 
-const STATUS_CONFIG: Record<GroundingStatus, {
-  label: string;
-  color: string;
-  bg: string;
-  border: string;
-  icon: typeof Check;
-}> = {
-  GROUNDED: {
-    label: 'Grounded',
-    color: 'text-emerald-400',
-    bg: 'bg-emerald-500/10',
-    border: 'border-emerald-500/30',
-    icon: Check,
-  },
-  SUPPORTED: {
-    label: 'Supported',
-    color: 'text-sky-400',
-    bg: 'bg-sky-500/10',
-    border: 'border-sky-500/30',
-    icon: Check,
-  },
-  UNVERIFIED: {
-    label: 'Unverified',
-    color: 'text-amber-400',
-    bg: 'bg-amber-500/10',
-    border: 'border-amber-500/30',
-    icon: AlertTriangle,
-  },
-  INFERRED: {
-    label: 'Inferred',
-    color: 'text-violet-400',
-    bg: 'bg-violet-500/10',
-    border: 'border-violet-500/30',
-    icon: Lightbulb,
-  },
-};
+export function ClaimBadge({ status, claim, source, onClick, size = 'md' }: ClaimBadgeProps) {
+  const sizeClasses = {
+    sm: 'h-2 w-2',
+    md: 'h-3 w-3',
+    lg: 'h-4 w-4',
+  };
 
-export default function ClaimBadge({ status, claim, source, confidence, compact, onClick }: ClaimBadgeProps) {
-  const config = STATUS_CONFIG[status] || STATUS_CONFIG.UNVERIFIED;
+  const badgeConfig = {
+    GROUNDED: {
+      color: 'bg-success',
+      icon: ShieldCheck,
+      label: 'Grounded',
+      description: 'Directly supported by source',
+      className: 'text-success border-success/20 bg-success/10 hover:bg-success/20',
+    },
+    SUPPORTED: {
+      color: 'bg-warning',
+      icon: ShieldAlert,
+      label: 'Supported',
+      description: 'Paraphrased from source',
+      className: 'text-warning border-warning/20 bg-warning/10 hover:bg-warning/20',
+    },
+    UNVERIFIED: {
+      color: 'bg-destructive',
+      icon: ShieldQuestion,
+      label: 'Unverified',
+      description: 'No matching source found',
+      className: 'text-destructive border-destructive/20 bg-destructive/10 hover:bg-destructive/20',
+    },
+    INFERRED: {
+      color: 'bg-muted-foreground',
+      icon: Lightbulb,
+      label: 'Inferred',
+      description: 'AI synthesis/inference',
+      className: 'text-muted-foreground border-border bg-muted hover:bg-muted/80',
+    },
+  };
+
+  const config = badgeConfig[status];
   const Icon = config.icon;
 
-  if (compact) {
-    return (
-      <span
-        className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${config.bg} ${config.color} ${config.border} border cursor-default`}
-        title={`${config.label}${source ? ` - ${source}` : ''}${confidence != null ? ` (${Math.round(confidence * 100)}%)` : ''}`}
-      >
-        <Icon className="h-2.5 w-2.5" />
-        {config.label}
-      </span>
-    );
-  }
+  return (
+    <div
+      onClick={onClick}
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-all ${
+        config.className
+      } ${onClick ? 'cursor-pointer' : ''}`}
+      title={`${config.label}: ${config.description}${source ? ` (${source})` : ''}`}
+    >
+      <Icon className={sizeClasses[size]} />
+      <span>{config.label}</span>
+    </div>
+  );
+}
+
+export function ClaimDot({ status, onClick }: { status: ClaimBadgeProps['status']; onClick?: () => void }) {
+  const dotConfig = {
+    GROUNDED: 'bg-success',
+    SUPPORTED: 'bg-warning',
+    UNVERIFIED: 'bg-destructive',
+    INFERRED: 'bg-muted-foreground',
+  };
 
   return (
-    <button
+    <div
       onClick={onClick}
-      className={`group flex items-start gap-2 rounded-lg border p-2 text-left transition-all hover:scale-[1.01] ${config.bg} ${config.border}`}
-    >
-      <div className={`mt-0.5 rounded-full p-1 ${config.bg} ${config.color}`}>
-        <Icon className="h-3 w-3" />
-      </div>
-      <div className="min-w-0 flex-1">
-        {claim && (
-          <p className="text-xs text-foreground/90 leading-relaxed line-clamp-2">{claim}</p>
-        )}
-        <div className="mt-1 flex items-center gap-2">
-          <span className={`text-[10px] font-medium ${config.color}`}>{config.label}</span>
-          {source && (
-            <span className="text-[10px] text-muted-foreground truncate">{source}</span>
-          )}
-          {confidence != null && (
-            <span className="text-[10px] text-muted-foreground">{Math.round(confidence * 100)}%</span>
-          )}
-        </div>
-      </div>
-    </button>
+      className={`inline-block h-2 w-2 rounded-full ${dotConfig[status]} ${
+        onClick ? 'cursor-pointer' : ''
+      } transition-transform hover:scale-125`}
+      title={status}
+    />
   );
 }

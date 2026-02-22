@@ -40,9 +40,11 @@ from app.core.qdrant_store import get_qdrant_client
 from app.services.docling_parser import DoclingParser
 from app.services.semantic_chunker import SemanticChunker
 from app.services.raptor import RaptorService
+from app.services.bm25_index import get_bm25_service
 from qdrant_client.models import Distance, VectorParams, PointStruct
 from datetime import datetime
 import hashlib
+import json as json_module
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -86,7 +88,15 @@ class IngestionService:
             self.raptor = RaptorService(self.llm_service)
             logger.info("RAPTOR hierarchy builder enabled")
 
-        logger.info("IngestionService initialized (embedded Qdrant + SQLite)")
+        # Atlas 3.0: BM25 sparse index
+        self.bm25_service = get_bm25_service()
+
+        # Atlas 3.0: Strict ontology for edge types
+        self._allowed_edge_types = set(
+            t.strip() for t in settings.GRAPH_ONTOLOGY_EDGE_TYPES.split(",") if t.strip()
+        )
+
+        logger.info("IngestionService initialized (embedded Qdrant + SQLite + BM25)")
 
     def _load_gliner_model(self):
         """Load GLiNER: try ONNX if available, else PyTorch."""
@@ -221,8 +231,9 @@ class IngestionService:
             logger.info(f"Document created: {filename} (ID: {doc_id})")
 
             # 2. Extract text from document
+            t0_extract = time.perf_counter()
             pages = await self._extract_text_from_file(file_path, file_type)
-            logger.info(f"Extracted {len(pages)} sections from {file_type.upper()} file")
+            logger.info(f"[INGEST TIMING] extract_text: {time.perf_counter() - t0_extract:.2f}s | Extracted {len(pages)} sections from {file_type.upper()} file")
 
             if len(pages) == 0:
                 logger.warning(f"No text extracted from {file_type.upper()} file")
@@ -244,8 +255,9 @@ class IngestionService:
                 }
 
             # 3. Chunk document
+            t0_chunk = time.perf_counter()
             chunks = self._chunk_document(pages, doc_id, filename)
-            logger.info(f"Created {len(chunks)} chunks")
+            logger.info(f"[INGEST TIMING] chunk: {time.perf_counter() - t0_chunk:.2f}s | Created {len(chunks)} chunks")
 
             document.total_chunks = len(chunks)
             document.processed_chunks = 0
@@ -271,17 +283,20 @@ class IngestionService:
             await self._ensure_collection()
 
             # 6. Extract entities and create graph nodes
+            t0_entities = time.perf_counter()
             node_ids_by_chunk = await self._extract_entities_parallel(
                 chunks, doc_id, session, document, project_id
             )
             total_nodes = sum(len(ids) for ids in node_ids_by_chunk.values())
-            logger.info(f"Created {total_nodes} knowledge graph nodes")
+            logger.info(f"[INGEST TIMING] entity_extraction: {time.perf_counter() - t0_entities:.2f}s | Created {total_nodes} knowledge graph nodes")
             session.commit()
 
             # 7. Embed and store in Qdrant
+            t0_embed = time.perf_counter()
             vector_points = await self._embed_chunks_parallel(
                 chunks, doc_id, node_ids_by_chunk, document, session
             )
+            logger.info(f"[INGEST TIMING] embed_chunks: {time.perf_counter() - t0_embed:.2f}s | {len(vector_points)} vectors")
 
             # 7.5: Build RAPTOR hierarchy (Phase B4)
             raptor_points = []
@@ -332,6 +347,7 @@ class IngestionService:
             # 8. Upload all vectors to Qdrant (L0 chunks + RAPTOR L1/L2)
             all_points = vector_points + raptor_points
             if all_points:
+                t0_upsert = time.perf_counter()
                 loop = asyncio.get_event_loop()
                 await loop.run_in_executor(
                     self.executor,
@@ -339,9 +355,16 @@ class IngestionService:
                         collection_name=self.collection_name, points=all_points
                     ),
                 )
-                logger.info(f"Uploaded {len(all_points)} vectors to Qdrant ({len(vector_points)} chunks + {len(raptor_points)} RAPTOR)")
+                logger.info(f"[INGEST TIMING] qdrant_upsert: {time.perf_counter() - t0_upsert:.2f}s | Uploaded {len(all_points)} vectors to Qdrant ({len(vector_points)} chunks + {len(raptor_points)} RAPTOR)")
 
-            # 8.5: Extract paper structure metadata (Phase 4, Task 4.1)
+            # 8.5: Index chunks in BM25 for sparse retrieval (Atlas 3.0)
+            try:
+                self.bm25_service.add_documents(doc_id, chunks)
+                logger.info(f"Added {len(chunks)} chunks to BM25 index")
+            except Exception as e:
+                logger.warning(f"BM25 indexing failed (non-fatal): {e}")
+
+            # 8.6: Extract paper structure metadata (Phase 4, Task 4.1)
             try:
                 full_text = "\n".join(p["text"] for p in pages)
                 paper_structure = await self._extract_paper_structure(full_text, filename)
@@ -376,7 +399,7 @@ class IngestionService:
                     "nodes": total_nodes,
                 },
             }
-            logger.info(f"Ingestion complete in {elapsed:.2f}s: {filename}")
+            logger.info(f"[INGEST TIMING] total: {elapsed:.2f}s | Ingestion complete: {filename}")
             return result
 
         except Exception as e:
@@ -687,10 +710,54 @@ class IngestionService:
             if chunk_node_ids:
                 node_ids_by_chunk[chunk["chunk_index"]] = chunk_node_ids
 
-            # Create co-occurrence edges
-            if len(entity_nodes) > 1:
+            # Atlas 3.0: Evidence-bound relationship extraction
+            # Instead of naive CO_OCCURS edges, use LLM to extract typed relationships
+            # with evidence quotes that are validated by a critic step
+            if len(entity_nodes) > 1 and settings.ENABLE_EVIDENCE_BOUND_EXTRACTION:
+                try:
+                    entity_names = [
+                        (n.id, (n.properties or {}).get("name", "Unknown"))
+                        for n in entity_nodes
+                    ]
+                    relationships = await self._extract_evidence_bound_relationships(
+                        chunk["text"], entity_names, chunk_uuid
+                    )
+                    for rel in relationships:
+                        edge = Edge(
+                            id=str(uuid.uuid4()),
+                            source_id=rel["source_id"],
+                            target_id=rel["target_id"],
+                            type=rel["type"],
+                            document_id=doc_id,
+                            project_id=project_id,
+                            properties={
+                                "chunk_id": chunk_uuid,
+                                "evidence_quote": rel.get("evidence_quote", ""),
+                                "confidence": rel.get("confidence", 0.5),
+                                "context": chunk["text"][:200],
+                            },
+                        )
+                        session.add(edge)
+                except Exception as e:
+                    logger.warning(f"Evidence-bound extraction failed for chunk {chunk['chunk_index']}, "
+                                   f"falling back to CO_OCCURS: {e}")
+                    # Fallback: create CO_OCCURS edges
+                    for i, node1 in enumerate(entity_nodes):
+                        for node2 in entity_nodes[i + 1:]:
+                            edge = Edge(
+                                id=str(uuid.uuid4()),
+                                source_id=node1.id,
+                                target_id=node2.id,
+                                type="CO_OCCURS",
+                                document_id=doc_id,
+                                project_id=project_id,
+                                properties={"chunk_id": chunk_uuid, "context": chunk["text"][:200]},
+                            )
+                            session.add(edge)
+            elif len(entity_nodes) > 1:
+                # Legacy mode: CO_OCCURS edges when evidence-bound extraction is disabled
                 for i, node1 in enumerate(entity_nodes):
-                    for node2 in entity_nodes[i + 1 :]:
+                    for node2 in entity_nodes[i + 1:]:
                         edge = Edge(
                             id=str(uuid.uuid4()),
                             source_id=node1.id,
@@ -849,6 +916,185 @@ class IngestionService:
         except Exception as e:
             logger.error(f"GLiNER extraction failed: {str(e)}", exc_info=True)
             raise RuntimeError(f"GLiNER entity extraction failed: {str(e)}") from e
+
+    # ----------------------------------------------------------------
+    # Atlas 3.0: Evidence-Bound Relationship Extraction (Phase 2)
+    # ----------------------------------------------------------------
+
+    async def _extract_evidence_bound_relationships(
+        self,
+        chunk_text: str,
+        entity_names: List[tuple],  # [(node_id, entity_name), ...]
+        chunk_id: str,
+    ) -> List[Dict[str, Any]]:
+        """Extract typed, evidence-bound relationships between entities using LLM.
+
+        Instead of naive co-occurrence edges, this method:
+        1. Prompts the LLM to identify relationships with evidence quotes
+        2. Validates that evidence quotes are actual substrings of the chunk
+        3. Filters to only allowed ontology edge types
+
+        Args:
+            chunk_text: The text of the chunk containing the entities.
+            entity_names: List of (node_id, entity_name) tuples.
+            chunk_id: UUID of the chunk.
+
+        Returns:
+            List of validated relationship dicts.
+        """
+        if len(entity_names) < 2:
+            return []
+
+        # Build entity list for prompt
+        entity_list = ", ".join(name for _, name in entity_names)
+        allowed_types = ", ".join(sorted(self._allowed_edge_types))
+
+        prompt = f"""Analyze this text and identify relationships between the given entities.
+
+ENTITIES: {entity_list}
+
+ALLOWED RELATIONSHIP TYPES: {allowed_types}
+
+TEXT:
+{chunk_text[:2000]}
+
+Return ONLY a JSON array of relationships. Each relationship MUST include:
+- "source": exact entity name from the list
+- "target": exact entity name from the list
+- "type": one of the allowed relationship types above
+- "evidence_quote": the EXACT substring from the text that proves this relationship
+
+Rules:
+- Only include relationships explicitly stated in the text
+- The evidence_quote MUST be a direct quote from the text (copy-paste)
+- Do NOT infer relationships that are not stated
+- Return an empty array [] if no clear relationships exist
+
+JSON array:"""
+
+        try:
+            response = await self.llm_service.generate(
+                prompt=prompt, temperature=0.1, max_tokens=1024
+            )
+
+            # Parse JSON response
+            relationships_raw = self._parse_relationships_json(response)
+        except Exception as e:
+            logger.debug(f"Relationship extraction LLM call failed: {e}")
+            return []
+
+        # Build name -> node_id map
+        name_to_id = {name.lower(): nid for nid, name in entity_names}
+
+        validated = []
+        for rel in relationships_raw:
+            source_name = rel.get("source", "").lower()
+            target_name = rel.get("target", "").lower()
+            rel_type = rel.get("type", "").upper()
+            evidence = rel.get("evidence_quote", "")
+
+            # Validate source and target exist
+            source_id = name_to_id.get(source_name)
+            target_id = name_to_id.get(target_name)
+            if not source_id or not target_id or source_id == target_id:
+                continue
+
+            # Validate edge type is in ontology
+            if rel_type not in self._allowed_edge_types:
+                # Try to map to closest allowed type
+                rel_type = "RELATED_TO"
+
+            # Atlas 3.0 Critic: Validate evidence quote is a real substring
+            if settings.ENABLE_GRAPH_CRITIC and evidence:
+                if not self._validate_evidence_quote(chunk_text, evidence):
+                    logger.debug(f"Dropping edge {source_name}->{target_name}: evidence not found in text")
+                    continue
+
+            validated.append({
+                "source_id": source_id,
+                "target_id": target_id,
+                "type": rel_type,
+                "evidence_quote": evidence,
+                "confidence": 0.8 if evidence else 0.5,
+            })
+
+        return validated
+
+    @staticmethod
+    def _validate_evidence_quote(chunk_text: str, evidence_quote: str) -> bool:
+        """Critic validation: Check if the evidence quote exists in the chunk text.
+
+        This is the core anti-hallucination mechanism. If the LLM fabricated
+        the evidence quote, the edge is dropped.
+
+        Args:
+            chunk_text: The original chunk text.
+            evidence_quote: The claimed evidence quote from the LLM.
+
+        Returns:
+            True if the quote (or a close substring) exists in the text.
+        """
+        if not evidence_quote or len(evidence_quote) < 10:
+            return False
+
+        # Normalize whitespace for comparison
+        normalized_text = " ".join(chunk_text.lower().split())
+        normalized_quote = " ".join(evidence_quote.lower().split())
+
+        # Exact substring match
+        if normalized_quote in normalized_text:
+            return True
+
+        # Fuzzy match: check if at least 80% of the quote words appear in sequence
+        quote_words = normalized_quote.split()
+        if len(quote_words) < 3:
+            return normalized_quote in normalized_text
+
+        # Sliding window match
+        text_words = normalized_text.split()
+        window_size = len(quote_words)
+        match_threshold = int(window_size * 0.7)
+
+        for i in range(len(text_words) - window_size + 1):
+            window = text_words[i:i + window_size]
+            matches = sum(1 for qw, tw in zip(quote_words, window) if qw == tw)
+            if matches >= match_threshold:
+                return True
+
+        return False
+
+    @staticmethod
+    def _parse_relationships_json(response: str) -> List[Dict[str, Any]]:
+        """Parse JSON array of relationships from LLM response."""
+        text = response.strip()
+
+        # Strip markdown code blocks
+        if text.startswith("```"):
+            import re
+            text = re.sub(r"^```(?:json)?\s*\n?", "", text)
+            text = re.sub(r"\n?```\s*$", "", text)
+
+        # Try direct parse
+        try:
+            result = json_module.loads(text)
+            if isinstance(result, list):
+                return result
+            if isinstance(result, dict) and "relationships" in result:
+                return result["relationships"]
+            return []
+        except json_module.JSONDecodeError:
+            pass
+
+        # Try to find JSON array in response
+        import re
+        match = re.search(r'\[[\s\S]*\]', text)
+        if match:
+            try:
+                return json_module.loads(match.group())
+            except json_module.JSONDecodeError:
+                pass
+
+        return []
 
     # ----------------------------------------------------------------
     # Paper Structure Extraction (Phase 4, Task 4.1)

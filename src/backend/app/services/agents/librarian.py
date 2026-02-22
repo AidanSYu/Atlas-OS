@@ -87,6 +87,18 @@ def _build_librarian_graph(
                     logger.warning(f"Reranking failed: {e}")
                     trace.append(f"Reranking failed: {e}")
 
+            # Filter out chunks that are below a relevance threshold
+            filtered_chunks = []
+            for c in chunks:
+                score = c.get("score", 0.0)
+                if "rerank_score" in c:
+                    if score >= 0.05:  # FlashRank threshold
+                        filtered_chunks.append(c)
+                else:
+                    if score >= 0.4:  # Qdrant cosine threshold
+                        filtered_chunks.append(c)
+            chunks = filtered_chunks
+
             trace.append(f"Found {len(chunks)} relevant passages")
             return {**state, "chunks": chunks, "reasoning_trace": trace}
             
@@ -96,6 +108,17 @@ def _build_librarian_graph(
 
     async def answer_node(state: LibrarianState) -> LibrarianState:
         """Single LLM call with retrieved context."""
+        import re
+        
+        def extract_xml_tag(text: str, tag: str) -> str:
+            if not text:
+                return ""
+            pattern = f"<{tag}[^>]*>(.*?)</{tag}>"
+            match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+            if match:
+                return match.group(1).strip()
+            return ""
+            
         trace = list(state.get("reasoning_trace", []))
         chunks = state.get("chunks", [])
 
@@ -119,16 +142,46 @@ Question: {state["query"]}
 Evidence:
 {context}
 
-If the evidence doesn't contain the answer, say "I cannot find this in your documents."
+Format your response exactly like this:
 
-Answer:"""
+<reasoning>
+[Think step-by-step about the evidence and how it answers the question]
+</reasoning>
+
+<confidence>
+[Enter a score between 0.0 and 1.0 representing how well the evidence answers the question]
+</confidence>
+
+<answer>
+[Your concise answer with citations. If evidence doesn't answer it, say "I cannot find this in your documents."]
+</answer>"""
 
         try:
-            answer = await llm_service.generate(
-                prompt=prompt, temperature=0.1, max_tokens=1024
+            # Provide a bit more tokens and slightly higher temperature for reasoning
+            full_response = await llm_service.generate(
+                prompt=prompt, temperature=0.15, max_tokens=1024
             )
+            
+            answer = extract_xml_tag(full_response, "answer") or full_response.strip()
+            reasoning = extract_xml_tag(full_response, "reasoning")
+            confidence_str = extract_xml_tag(full_response, "confidence")
+            
+            try:
+                confidence_score = float(confidence_str)
+            except ValueError:
+                if "HIGH" in confidence_str.upper():
+                    confidence_score = 0.9
+                elif "MEDIUM" in confidence_str.upper():
+                    confidence_score = 0.5
+                elif "LOW" in confidence_str.upper():
+                    confidence_score = 0.2
+                else:
+                    confidence_score = 0.7
+                    
         except Exception as e:
             answer = f"Error generating answer: {e}"
+            reasoning = f"Failed to generate reasoning: {e}"
+            confidence_score = 0.0
 
         citations = [
             {
@@ -139,12 +192,16 @@ Answer:"""
             }
             for c in chunks[:5]
         ]
+        
+        if reasoning:
+            # Add dynamic trace step
+            trace.append(f"Reasoning: {reasoning[:200]}...")
 
         return {
             **state,
             "answer": answer.strip(),
             "citations": citations,
-            "confidence_score": 0.7,  # Default for simple retrieval
+            "confidence_score": confidence_score,
             "status": "completed",
             "reasoning_trace": trace + ["Answer generated"],
         }

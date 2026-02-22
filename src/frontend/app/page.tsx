@@ -108,56 +108,29 @@ export default function HomePage() {
   };
 
   return (
-    <main className="min-h-screen bg-background text-foreground">
-      {/* Hero Section */}
-      <div className="relative overflow-hidden border-b border-border">
-        <div className="absolute inset-0 atlas-dot-grid opacity-40" />
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-gradient-to-b from-primary/8 via-accent/5 to-transparent rounded-full blur-3xl" />
-
-        <div className="relative mx-auto max-w-6xl px-6 pt-16 pb-12 sm:px-10">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="relative flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-accent glow-md">
-              <Zap className="h-5 w-5 text-white" />
+    <main className="min-h-screen bg-background text-foreground selection:bg-primary/30">
+      {/* Refined Header Section */}
+      <div className="border-b border-border/40 bg-card/30 backdrop-blur-md">
+        <div className="mx-auto max-w-6xl px-6 pt-16 pb-12 sm:px-10">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="flex h-8 w-8 items-center justify-center rounded bg-safety/10 border border-safety/20">
+              <Zap className="h-4 w-4 text-safety" />
             </div>
-            <div>
-              <h1 className="gradient-text font-serif text-4xl sm:text-5xl font-bold tracking-tight">Atlas</h1>
-            </div>
+            <h1 className="font-display text-3xl font-medium tracking-tight text-white">Atlas</h1>
           </div>
-          <p className="max-w-xl text-lg text-muted-foreground leading-relaxed">
-            Research-native intelligence. Upload papers, discover connections,
-            and let multi-agent AI do the heavy lifting.
+          <p className="max-w-xl text-[13px] text-text-secondary leading-relaxed">
+            Spatial Research Platform. Upload papers, trace relationships through dynamic knowledge graphs, and leverage autonomous agents for deep literature synthesis.
           </p>
-
-          <div className="mt-8 flex flex-wrap items-center gap-6 text-sm text-muted-foreground">
-            <div className="flex items-center gap-2">
-              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10">
-                <Brain className="h-3.5 w-3.5 text-primary" />
-              </div>
-              <span>Multi-Agent Swarm</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent/10">
-                <Network className="h-3.5 w-3.5 text-accent" />
-              </div>
-              <span>Knowledge Graphs</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10">
-                <BookOpen className="h-3.5 w-3.5 text-primary" />
-              </div>
-              <span>Deep Document Analysis</span>
-            </div>
-          </div>
         </div>
       </div>
 
       {/* Content */}
-      <div className="mx-auto max-w-6xl px-6 py-8 sm:px-10">
+      <div className="mx-auto max-w-6xl px-6 py-10 sm:px-10">
         {/* Actions Bar */}
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-8">
           <div className="flex items-center gap-3">
-            <h2 className="font-serif text-xl text-foreground">Workspaces</h2>
-            <span className="rounded-full bg-surface px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
+            <h2 className="font-display text-sm font-semibold uppercase tracking-wider text-text-secondary">Workspaces</h2>
+            <span className="rounded bg-surface px-2 py-0.5 text-[10px] font-mono font-medium text-text-secondary">
               {projects.length}
             </span>
           </div>
@@ -165,51 +138,51 @@ export default function HomePage() {
           <div className="flex items-center gap-3">
             {projects.length > 0 && (
               <div className="relative">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-secondary" />
                 <input
                   type="text"
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
-                  placeholder="Search workspaces..."
-                  className="h-9 w-56 rounded-lg border border-border bg-card pl-9 pr-3 text-sm text-foreground outline-none transition-all placeholder:text-muted-foreground focus:border-primary/50 focus:ring-1 focus:ring-primary/25"
+                  placeholder="Filter workspaces..."
+                  className="h-8 w-56 rounded border border-border/50 bg-background pl-8 pr-3 text-[13px] text-text-primary outline-none transition-all placeholder:text-text-secondary/60 focus:border-safety/50 focus:ring-1 focus:ring-safety/25"
                 />
               </div>
             )}
             <button
               onClick={() => setShowCreateForm(true)}
-              className="inline-flex h-9 items-center gap-2 rounded-lg bg-gradient-to-r from-primary to-primary/80 px-4 text-sm font-medium text-primary-foreground shadow-sm transition-all hover:opacity-90 hover:shadow-md glow-sm"
+              className="inline-flex h-8 items-center gap-2 rounded bg-safety px-3 text-[13px] font-medium text-white transition-all hover:bg-safety/90"
             >
-              <Plus className="h-4 w-4" />
+              <Plus className="h-3.5 w-3.5" />
               New Workspace
             </button>
           </div>
         </div>
 
-        {/* Create Project Modal Overlay */}
+        {/* Create Project Panel */}
         {showCreateForm && (
-          <div className="mb-8 rounded-xl border border-primary/20 bg-card p-6 glow-sm">
-            <h3 className="font-serif text-lg text-foreground mb-4">Create New Workspace</h3>
-            <div className="flex gap-3">
+          <div className="mb-8 rounded border border-border/50 bg-card/50 p-5">
+            <h3 className="font-display text-[13px] font-medium text-text-primary mb-3">Initialize Workspace</h3>
+            <div className="flex gap-2">
               <input
                 type="text"
                 value={newProjectName}
                 onChange={(event) => setNewProjectName(event.target.value)}
                 onKeyDown={(event) => event.key === 'Enter' && handleCreateProject()}
-                placeholder="e.g., Literature Review: Neural Architecture Search"
+                placeholder="Workspace Name (e.g. CRISPR Pathway Analysis)"
                 autoFocus
-                className="h-10 flex-1 rounded-lg border border-border bg-background px-4 text-sm text-foreground outline-none transition-all placeholder:text-muted-foreground focus:border-primary/50 focus:ring-1 focus:ring-primary/25"
+                className="h-9 flex-1 rounded border border-border/50 bg-background px-3 text-[13px] text-text-primary outline-none transition-all placeholder:text-text-secondary/50 focus:border-safety/50 focus:ring-1 focus:ring-safety/25"
               />
               <button
                 onClick={handleCreateProject}
                 disabled={creatingProject || !newProjectName.trim()}
-                className="inline-flex h-10 items-center gap-2 rounded-lg bg-primary px-5 text-sm font-medium text-primary-foreground transition-all hover:opacity-90 disabled:opacity-40"
+                className="inline-flex h-9 items-center gap-2 rounded bg-safety px-4 text-[13px] font-medium text-white transition-all hover:bg-safety/90 disabled:opacity-40"
               >
-                {creatingProject ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                {creatingProject ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
                 Create
               </button>
               <button
                 onClick={() => { setShowCreateForm(false); setNewProjectName(''); }}
-                className="h-10 rounded-lg border border-border px-4 text-sm text-muted-foreground transition-colors hover:bg-surface hover:text-foreground"
+                className="h-9 rounded border border-border/50 px-3 text-[13px] text-text-secondary transition-colors hover:bg-surface hover:text-text-primary"
               >
                 Cancel
               </button>
@@ -219,8 +192,8 @@ export default function HomePage() {
 
         {/* Error */}
         {error && (
-          <div className="mb-6 flex items-start gap-3 rounded-xl border border-destructive/30 bg-destructive/5 px-5 py-4 text-sm text-destructive">
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div className="mb-6 flex items-start gap-3 rounded border border-destructive/30 bg-destructive/5 px-4 py-3 text-[13px] text-destructive">
+            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             <div className="flex-1">{error}</div>
             <button onClick={() => setError(null)} className="text-destructive/60 hover:text-destructive">
               &times;
@@ -232,35 +205,28 @@ export default function HomePage() {
         {loading ? (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {Array.from({ length: 6 }).map((_, index) => (
-              <div key={index} className="h-44 animate-pulse rounded-xl border border-border bg-card" />
+              <div key={index} className="h-36 animate-pulse rounded border border-border/40 bg-card/30" />
             ))}
           </div>
         ) : projects.length === 0 && !showCreateForm ? (
-          <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-border bg-card/50 py-20 px-8 text-center">
-            <div className="relative mb-6">
-              <div className="rounded-2xl bg-gradient-to-br from-primary/10 to-accent/10 p-6">
-                <Sparkles className="h-10 w-10 text-primary" />
-              </div>
-              <div className="absolute -bottom-1 -right-1 h-4 w-4 rounded-full bg-accent glow-accent" />
-            </div>
-            <h3 className="font-serif text-2xl text-foreground mb-2">Start Your Research</h3>
-            <p className="max-w-md text-sm text-muted-foreground leading-relaxed mb-8">
-              Create your first workspace to upload papers, build knowledge graphs,
-              and let Atlas's multi-agent system accelerate your research.
+          <div className="flex flex-col items-center justify-center rounded border border-dashed border-border/50 bg-card/10 py-16 px-8 text-center">
+            <FolderKanban className="h-8 w-8 text-text-secondary/30 mb-4" />
+            <h3 className="font-display text-sm font-medium text-text-primary mb-1">No Active Workspaces</h3>
+            <p className="max-w-sm text-[13px] text-text-secondary leading-relaxed mb-6">
+              Create a workspace to isolate your current documents, knowledge graph, and AI agent sessions.
             </p>
             <button
               onClick={() => setShowCreateForm(true)}
-              className="inline-flex h-11 items-center gap-2 rounded-xl bg-gradient-to-r from-primary to-accent px-6 text-sm font-medium text-white shadow-lg transition-all hover:opacity-90 hover:shadow-xl glow-md"
+              className="inline-flex h-9 items-center gap-2 rounded bg-safety px-4 text-[13px] font-medium text-white transition-all hover:bg-safety/90"
             >
-              <Plus className="h-4 w-4" />
-              Create First Workspace
+              <Plus className="h-3.5 w-3.5" />
+              Initialize Workspace
             </button>
           </div>
         ) : filteredProjects.length === 0 ? (
-          <div className="flex h-48 flex-col items-center justify-center rounded-xl border border-border bg-card text-center">
-            <FolderKanban className="mb-3 h-7 w-7 text-muted-foreground/40" />
-            <p className="text-sm text-foreground/70">No matching workspaces</p>
-            <p className="mt-1 text-xs text-muted-foreground">Try a different search term</p>
+          <div className="flex h-36 flex-col items-center justify-center rounded border border-border/40 bg-card/30 text-center">
+            <Search className="mb-2 h-5 w-5 text-text-secondary/40" />
+            <p className="text-[13px] text-text-primary/70">No matching workspaces</p>
           </div>
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -271,42 +237,42 @@ export default function HomePage() {
                 tabIndex={0}
                 onClick={() => router.push(`/project/${encodeURIComponent(project.id)}`)}
                 onKeyDown={(e) => e.key === 'Enter' && router.push(`/project/${encodeURIComponent(project.id)}`)}
-                className="group relative flex h-44 cursor-pointer flex-col justify-between rounded-xl border border-border bg-card p-5 text-left transition-all hover:border-primary/40 hover:bg-card/80 hover:shadow-lg hover:shadow-primary/5"
+                className="group relative flex h-36 cursor-pointer flex-col justify-between rounded border border-border/40 bg-card/30 p-5 text-left transition-all hover:border-safety/40 hover:bg-card/50"
               >
                 {/* Delete button */}
                 <button
                   type="button"
                   onClick={(event) => handleDeleteProject(event, project)}
                   disabled={deletingProjectId === project.id}
-                  className="absolute right-3 top-3 z-10 inline-flex h-7 w-7 items-center justify-center rounded-lg border border-transparent text-muted-foreground/0 transition-all group-hover:border-border group-hover:bg-surface group-hover:text-muted-foreground hover:!bg-destructive/10 hover:!text-destructive hover:!border-destructive/30 disabled:opacity-50"
+                  className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded border border-transparent text-text-secondary/0 transition-all group-hover:border-border/50 group-hover:bg-surface group-hover:text-text-secondary hover:!bg-destructive/10 hover:!text-destructive hover:!border-destructive/30 disabled:opacity-50"
                   title="Delete workspace"
                 >
                   {deletingProjectId === project.id ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <Loader2 className="h-3 w-3 animate-spin" />
                   ) : (
-                    <Trash2 className="h-3.5 w-3.5" />
+                    <Trash2 className="h-3 w-3" />
                   )}
                 </button>
 
                 <div>
-                  <div className="flex items-center gap-2.5 mb-2">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
-                      <FolderKanban className="h-4 w-4 text-primary" />
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="flex h-6 w-6 items-center justify-center rounded bg-safety/10 border border-safety/10">
+                      <FolderKanban className="h-3.5 w-3.5 text-safety" />
                     </div>
-                    <p className="line-clamp-1 font-serif text-lg text-foreground group-hover:text-primary transition-colors">
+                    <p className="line-clamp-1 font-display text-[15px] font-medium text-text-primary group-hover:text-safety transition-colors">
                       {project.name}
                     </p>
                   </div>
-                  <p className="line-clamp-2 text-xs text-muted-foreground leading-relaxed pl-[42px]">
-                    {project.description || 'No description'}
+                  <p className="line-clamp-2 text-xs text-text-secondary leading-relaxed pl-8">
+                    {project.description || "No description provided."}
                   </p>
                 </div>
 
-                <div className="flex items-center justify-between pl-[42px]">
-                  <span className="text-[11px] text-muted-foreground/60">
+                <div className="flex items-center justify-between pl-8">
+                  <span className="font-mono text-[10px] uppercase tracking-wider text-text-secondary/50">
                     {project.created_at ? formatDate(project.created_at) : ''}
                   </span>
-                  <span className="inline-flex items-center gap-1 text-xs text-primary/0 transition-all group-hover:text-primary">
+                  <span className="inline-flex items-center gap-1 text-[11px] font-medium text-safety/0 transition-all group-hover:text-safety">
                     Open <ArrowRight className="h-3 w-3" />
                   </span>
                 </div>

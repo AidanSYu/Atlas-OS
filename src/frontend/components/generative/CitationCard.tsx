@@ -1,8 +1,10 @@
 'use client';
 
 import React from 'react';
-import { FileText, ExternalLink, ChevronRight } from 'lucide-react';
-import ClaimBadge, { GroundingStatus } from './ClaimBadge';
+import { FileText, ChevronRight } from 'lucide-react';
+import { ClaimDot } from './ClaimBadge';
+
+type GroundingStatus = 'GROUNDED' | 'SUPPORTED' | 'UNVERIFIED' | 'INFERRED';
 
 interface CitationCardProps {
   source: string;
@@ -10,6 +12,8 @@ interface CitationCardProps {
   excerpt?: string;
   relevance?: number;
   groundingStatus?: GroundingStatus;
+  abstract?: string;
+  keyFindings?: string[];
   onClick?: () => void;
 }
 
@@ -19,6 +23,8 @@ export default function CitationCard({
   excerpt,
   relevance,
   groundingStatus,
+  abstract,
+  keyFindings,
   onClick,
 }: CitationCardProps) {
   return (
@@ -46,7 +52,10 @@ export default function CitationCard({
 
           <div className="mt-2 flex items-center gap-2">
             {groundingStatus && (
-              <ClaimBadge status={groundingStatus} compact />
+              <div className="flex items-center gap-1.5">
+                <ClaimDot status={groundingStatus} onClick={onClick} />
+                <span className="text-[10px] text-muted-foreground">{groundingStatus}</span>
+              </div>
             )}
             {relevance != null && (
               <div className="flex items-center gap-1">
@@ -60,6 +69,20 @@ export default function CitationCard({
               </div>
             )}
           </div>
+
+          {keyFindings && keyFindings.length > 0 && (
+            <div className="mt-2 border-t border-border pt-2">
+              <p className="text-[10px] font-medium text-muted-foreground mb-1">Key Findings:</p>
+              <ul className="space-y-0.5">
+                {keyFindings.map((finding, i) => (
+                  <li key={i} className="text-[11px] text-foreground flex items-start gap-1.5">
+                    <span className="text-accent mt-0.5">•</span>
+                    <span>{finding}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
         <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
       </div>

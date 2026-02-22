@@ -1,5 +1,6 @@
 """FastAPI route handlers for Atlas Sidecar API."""
-from fastapi import APIRouter, UploadFile, File, HTTPException, Query, BackgroundTasks
+import asyncio
+from fastapi import APIRouter, UploadFile, File, HTTPException, Query, BackgroundTasks, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 import json
@@ -23,13 +24,25 @@ ingestion_service = None
 document_service = None
 graph_service = None
 context_engine_service = None
+workspace_service = None
 
 logger = logging.getLogger(__name__)
 
 
+async def monitor_disconnect(request: Request, cancel_event: asyncio.Event, poll_interval: float = 0.5):
+    """Poll for client disconnect and set the cancel event when detected."""
+    while not cancel_event.is_set():
+        if await request.is_disconnected():
+            cancel_event.set()
+            logger.info("Client disconnected - cancellation signal sent")
+            return
+        await asyncio.sleep(poll_interval)
+
+
+
 def ensure_services():
     """Initialize services - FATAL on failure."""
-    global chat_service, ingestion_service, document_service, graph_service, context_engine_service
+    global chat_service, ingestion_service, document_service, graph_service, context_engine_service, workspace_service
 
     if document_service is None:
         document_service = DocumentService()
@@ -47,6 +60,10 @@ def ensure_services():
         from app.services.context_engine import ContextEngineService
         context_engine_service = ContextEngineService()
         logger.info("ContextEngineService initialized")
+    if workspace_service is None:
+        from app.services.workspace import WorkspaceService
+        workspace_service = WorkspaceService()
+        logger.info("WorkspaceService initialized")
 
 
 # ============================================================
@@ -111,6 +128,8 @@ class ModelLoadResponse(BaseModel):
     device: str
     gpu_layers: int
     fallback: bool
+    model_source: str = "local"           # Atlas 3.0: "local" or "api"
+    api_models_available: bool = False     # Atlas 3.0: Whether API models are configured
 
 
 class ContextRequest(BaseModel):
@@ -119,6 +138,18 @@ class ContextRequest(BaseModel):
     current_doc_id: Optional[str] = None
     current_page: Optional[int] = None
 
+
+class ConfigKeys(BaseModel):
+    has_openai: bool
+    has_anthropic: bool
+    has_deepseek: bool
+    has_minimax: bool
+
+class ConfigKeysUpdate(BaseModel):
+    OPENAI_API_KEY: Optional[str] = None
+    ANTHROPIC_API_KEY: Optional[str] = None
+    DEEPSEEK_API_KEY: Optional[str] = None
+    MINIMAX_API_KEY: Optional[str] = None
 
 # ============================================================
 # HEALTH / INFO
@@ -129,14 +160,16 @@ async def root():
     """Health check endpoint."""
     return {
         "status": "online",
-        "service": "Atlas API - Agentic RAG Knowledge Engine",
-        "version": "2.0.0-sidecar",
+        "service": "Atlas API - Agentic MoE Knowledge Engine",
+        "version": "3.0.0-sidecar",
         "architecture": {
             "database": "SQLite (embedded)",
             "vector_store": "Qdrant (embedded, in-process)",
-            "knowledge_graph": "SQLite + NetworkX",
-            "llm": "llama-cpp-python (bundled)",
-            "swarm": "LangGraph Two-Brain (Navigator + Cortex)",
+            "knowledge_graph": "Evidence-Bound GraphRAG",
+            "llm": "Hybrid (local GGUF + LiteLLM API)",
+            "workspace": "Persistent Markdown/JSON Drafts",
+            "swarm": "LangGraph MoE (Supervisor + Expert Agents)",
+            "retrieval": "BM25 + Vector + RRF + FlashRank",
         },
     }
 
@@ -157,6 +190,138 @@ async def health_check():
             "llm": "bundled",
         },
     }
+
+
+@router.get("/config/keys", response_model=ConfigKeys)
+async def get_config_keys():
+    """Return flags indicating which API keys are stored."""
+    return {
+        "has_openai": bool(settings.OPENAI_API_KEY),
+        "has_anthropic": bool(settings.ANTHROPIC_API_KEY),
+        "has_deepseek": bool(settings.DEEPSEEK_API_KEY),
+        "has_minimax": bool(settings.MINIMAX_API_KEY),
+    }
+
+
+class ConfigKeysVerifyResponse(BaseModel):
+    """Result of verifying each provider's API key with a minimal API call."""
+    openai: bool
+    anthropic: bool
+    deepseek: bool
+    minimax: bool
+
+
+@router.post("/config/keys/verify", response_model=ConfigKeysVerifyResponse)
+async def verify_config_keys():
+    """Verify each configured API key with a minimal API call. Does not persist state."""
+    import os
+    result = {"openai": False, "anthropic": False, "deepseek": False, "minimax": False}
+    try:
+        import litellm
+    except ImportError:
+        return ConfigKeysVerifyResponse(**result)
+
+    async def _verify(model: str, env_key: str) -> bool:
+        key = getattr(settings, env_key, None) or ""
+        if not key or not key.strip():
+            return False
+        # Ensure the env var is set for LiteLLM (and leave it set if valid)
+        os.environ[env_key] = key
+        try:
+            resp = await litellm.acompletion(
+                model=model,
+                messages=[{"role": "user", "content": "Hi"}],
+                max_tokens=1,
+            )
+            verified = bool(resp and resp.choices and resp.choices[0].message)
+            logger.info(f"API key verify {env_key} ({model}): {'OK' if verified else 'empty response'}")
+            return verified
+        except Exception as e:
+            logger.warning(f"API key verify {env_key} ({model}) failed: {e}")
+            return False
+
+    if settings.OPENAI_API_KEY:
+        result["openai"] = await _verify("gpt-4o-mini", "OPENAI_API_KEY")
+    if settings.ANTHROPIC_API_KEY:
+        result["anthropic"] = await _verify("claude-3-haiku-20240307", "ANTHROPIC_API_KEY")
+    if settings.DEEPSEEK_API_KEY:
+        result["deepseek"] = await _verify("deepseek/deepseek-chat", "DEEPSEEK_API_KEY")
+    if settings.MINIMAX_API_KEY:
+        result["minimax"] = await _verify("minimax/MiniMax-M2.5", "MINIMAX_API_KEY")
+
+    return ConfigKeysVerifyResponse(**result)
+
+
+@router.post("/config/keys")
+async def update_config_keys(keys: ConfigKeysUpdate):
+    """Update API keys in the .env file and application memory."""
+    env_path = Path(__file__).resolve().parent.parent.parent / ".env"
+    
+    # Read existing env
+    env_lines = []
+    if env_path.exists():
+        with open(env_path, "r", encoding="utf-8") as f:
+            env_lines = f.readlines()
+            
+    import os as _os
+    updates = {}
+    if keys.OPENAI_API_KEY is not None:
+        updates["OPENAI_API_KEY"] = keys.OPENAI_API_KEY
+        settings.OPENAI_API_KEY = keys.OPENAI_API_KEY
+    if keys.ANTHROPIC_API_KEY is not None:
+        updates["ANTHROPIC_API_KEY"] = keys.ANTHROPIC_API_KEY
+        settings.ANTHROPIC_API_KEY = keys.ANTHROPIC_API_KEY
+    if keys.DEEPSEEK_API_KEY is not None:
+        updates["DEEPSEEK_API_KEY"] = keys.DEEPSEEK_API_KEY
+        settings.DEEPSEEK_API_KEY = keys.DEEPSEEK_API_KEY
+    if keys.MINIMAX_API_KEY is not None:
+        updates["MINIMAX_API_KEY"] = keys.MINIMAX_API_KEY
+        settings.MINIMAX_API_KEY = keys.MINIMAX_API_KEY
+
+    # Sync to os.environ so LiteLLM can find the keys at runtime
+    # (LiteLLM reads env vars, not the settings object)
+    for env_key, env_val in updates.items():
+        if env_val:
+            _os.environ[env_key] = env_val
+        elif env_key in _os.environ:
+            del _os.environ[env_key]
+        
+    if not updates:
+        return {"status": "success", "message": "No keys provided to update"}
+        
+    # Write updated env
+    try:
+        new_lines = []
+        updated_keys = set()
+        for line in env_lines:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                new_lines.append(line)
+                continue
+                
+            parts = stripped.split("=", 1)
+            if len(parts) == 2:
+                key = parts[0].strip()
+                if key in updates:
+                    new_lines.append(f'{key}="{updates[key]}"\n')
+                    updated_keys.add(key)
+                else:
+                    new_lines.append(line)
+            else:
+                new_lines.append(line)
+                
+        # Append keys that weren't already in the file
+        for key, value in updates.items():
+            if key not in updated_keys:
+                new_lines.append(f'{key}="{value}"\n')
+                
+        with open(env_path, "w", encoding="utf-8") as f:
+            f.writelines(new_lines)
+            
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Failed to update API keys: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save API keys configuration")
 
 
 @router.get("/models")
@@ -213,9 +378,11 @@ async def get_model_status():
 
 @router.post("/models/load", response_model=ModelLoadResponse)
 async def load_model(body: ModelLoadRequest):
-    """Load a specific GGUF model from the models directory.
-    
-    This endpoint is protected by a lock to prevent model switching during active queries.
+    """Load a model - either a local GGUF or an API model.
+
+    Atlas 3.0: Accepts both local model filenames (e.g., "Phi-3.5-mini-instruct.Q4_K_M.gguf")
+    and API model identifiers (e.g., "deepseek/deepseek-chat").
+    Models with "/" are treated as API models and routed through LiteLLM.
     """
     llm = get_llm_service()
     try:
@@ -225,6 +392,36 @@ async def load_model(body: ModelLoadRequest):
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
     return llm.get_status()
+
+
+@router.get("/models/registry")
+async def get_model_registry():
+    """Atlas 3.0: Get the full model registry (local + cloud API models).
+
+    Returns grouped lists for the frontend model selector:
+    - local: GGUF models in the models directory
+    - api: Cloud API models available via LiteLLM (with key status)
+    - active: Currently loaded model info
+    """
+    llm = get_llm_service()
+
+    # Local models
+    local_models = [
+        {"name": name, "source": "local", "provider": "local"}
+        for name in llm.list_available_models()
+    ]
+
+    # API models
+    api_models = llm.list_available_api_models()
+
+    # Current status
+    status = llm.get_status()
+
+    return {
+        "local": local_models,
+        "api": api_models,
+        "active": status,
+    }
 
 
 # ============================================================
@@ -542,7 +739,7 @@ async def get_full_graph(
 # ============================================================
 
 @router.post("/api/swarm/stream")
-async def stream_swarm(request: SwarmStreamRequest):
+async def stream_swarm(body: SwarmStreamRequest, request: Request):
     """Stream swarm execution via Server-Sent Events.
 
     Event types:
@@ -553,6 +750,7 @@ async def stream_swarm(request: SwarmStreamRequest):
       - evidence: {"source": "file.pdf", "page": 5, "excerpt": "..."}
       - grounding: {"claim": "...", "status": "GROUNDED", "confidence": 0.9}
       - complete: {"hypothesis": "full answer", "confidence": 0.85, ...}
+      - cancelled: {"message": "Generation stopped by user"}
       - error:    {"message": "..."}
     """
     ensure_services()
@@ -560,25 +758,35 @@ async def stream_swarm(request: SwarmStreamRequest):
         raise HTTPException(status_code=503, detail="Services not initialized. Check backend logs.")
 
     async def event_generator():
+        cancel_event = asyncio.Event()
+        monitor_task = asyncio.create_task(monitor_disconnect(request, cancel_event))
         try:
-            # Lazy import to avoid circular dependencies and allow partial implementation
-            # Task 2.2: Add Streaming to Swarm Execution
             from app.services.swarm import run_swarm_query_streaming
 
             async for event_type, event_data in run_swarm_query_streaming(
-                query=request.query,
-                project_id=request.project_id,
-                session_id=request.session_id,
+                query=body.query,
+                project_id=body.project_id,
+                session_id=body.session_id,
                 graph_service=graph_service,
                 llm_service=chat_service.retrieval_service.llm_service,
                 qdrant_client=chat_service.retrieval_service.qdrant_client,
                 collection_name=chat_service.retrieval_service.collection_name,
+                cancel_event=cancel_event,
             ):
-                # SSE format: "event: type\ndata: json\n\n"
+                if cancel_event.is_set():
+                    yield f"event: cancelled\ndata: {json.dumps({'message': 'Generation stopped by user'})}\n\n"
+                    break
                 yield f"event: {event_type}\ndata: {json.dumps(event_data)}\n\n"
         except Exception as e:
             logger.error(f"Streaming error: {e}", exc_info=True)
             yield f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
+        finally:
+            cancel_event.set()
+            monitor_task.cancel()
+            try:
+                await monitor_task
+            except asyncio.CancelledError:
+                pass
 
     return StreamingResponse(
         event_generator(),
@@ -615,8 +823,154 @@ async def run_swarm(request: SwarmRequest):
         return SwarmResponse(**result)
     except Exception as e:
         logger.exception("Swarm execution failed")
-        raise HTTPException(status_code=500, detail=f"Swarm error: {str(e)}")
+        err_msg = f"{type(e).__name__}: {str(e)}" if str(e) else type(e).__name__
+        raise HTTPException(status_code=500, detail=f"Swarm error: {err_msg}")
 
+
+# ============================================================
+# ATLAS 3.0: MoE (Mixture of Experts) Agentic RAG
+# ============================================================
+
+class MoERequest(BaseModel):
+    project_id: str
+    query: str
+    session_id: Optional[str] = None
+
+
+@router.post("/api/moe/run")
+async def run_moe(request: MoERequest):
+    """Atlas 3.0: Run the Mixture of Experts pipeline on a query.
+
+    The MoE pipeline uses a Supervisor agent to orchestrate specialized
+    Expert agents (Hypothesis, Retrieval, Writer, Critic) for multi-turn
+    research with grounding verification.
+    """
+    ensure_services()
+    if chat_service is None or graph_service is None:
+        raise HTTPException(status_code=503, detail="Services not initialized. Check backend logs.")
+    try:
+        from app.services.swarm import run_moe_query
+
+        result = await run_moe_query(
+            query=request.query,
+            project_id=request.project_id,
+            graph_service=graph_service,
+            llm_service=chat_service.retrieval_service.llm_service,
+            qdrant_client=chat_service.retrieval_service.qdrant_client,
+            collection_name=chat_service.retrieval_service.collection_name,
+        )
+        return result
+    except Exception as e:
+        logger.exception("MoE execution failed")
+        raise HTTPException(status_code=500, detail=f"MoE error: {str(e)}")
+
+
+@router.post("/api/moe/stream")
+async def stream_moe(body: MoERequest, request: Request):
+    """Atlas 3.0: Stream MoE execution via Server-Sent Events.
+
+    Event types:
+      - routing:    {"brain": "moe_supervisor", "intent": "MoE"}
+      - progress:   {"node": "hypothesis", "message": "Generating hypotheses..."}
+      - thinking:   {"content": "[Supervisor] Planning..."}
+      - hypotheses: {"items": [...], "selected": "..."}
+      - evidence:   {"items": [...], "count": N}
+      - grounding:  {"results": [...], "verdict": "PASS|REVISE"}
+      - complete:   {"hypothesis": "final answer", "confidence": 0.85, ...}
+      - cancelled:  {"message": "Generation stopped by user"}
+      - error:      {"message": "..."}
+    """
+    ensure_services()
+    if chat_service is None or graph_service is None:
+        raise HTTPException(status_code=503, detail="Services not initialized. Check backend logs.")
+
+    async def event_generator():
+        cancel_event = asyncio.Event()
+        monitor_task = asyncio.create_task(monitor_disconnect(request, cancel_event))
+        try:
+            from app.services.swarm import run_moe_query_streaming
+
+            async for event_type, event_data in run_moe_query_streaming(
+                query=body.query,
+                project_id=body.project_id,
+                session_id=body.session_id,
+                graph_service=graph_service,
+                llm_service=chat_service.retrieval_service.llm_service,
+                qdrant_client=chat_service.retrieval_service.qdrant_client,
+                collection_name=chat_service.retrieval_service.collection_name,
+                cancel_event=cancel_event,
+            ):
+                if cancel_event.is_set():
+                    yield f"event: cancelled\ndata: {json.dumps({'message': 'Generation stopped by user'})}\n\n"
+                    break
+                yield f"event: {event_type}\ndata: {json.dumps(event_data)}\n\n"
+        except Exception as e:
+            logger.error(f"MoE streaming error: {e}", exc_info=True)
+            yield f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
+        finally:
+            cancel_event.set()
+            monitor_task.cancel()
+            try:
+                await monitor_task
+            except asyncio.CancelledError:
+                pass
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+@router.post("/api/moe/hypotheses")
+async def stream_moe_hypotheses(body: MoERequest, request: Request):
+    """Atlas 3.0: Stream MoE interactive hypotheses generation via SSE.
+    """
+    ensure_services()
+    if chat_service is None or graph_service is None:
+        raise HTTPException(status_code=503, detail="Services not initialized. Check backend logs.")
+
+    async def event_generator():
+        cancel_event = asyncio.Event()
+        monitor_task = asyncio.create_task(monitor_disconnect(request, cancel_event))
+        try:
+            from app.services.swarm import generate_moe_hypotheses
+
+            async for event_type, event_data in generate_moe_hypotheses(
+                query=body.query,
+                project_id=body.project_id,
+                session_id=body.session_id,
+                graph_service=graph_service,
+                llm_service=chat_service.retrieval_service.llm_service,
+                cancel_event=cancel_event,
+            ):
+                if cancel_event.is_set():
+                    yield f"event: cancelled\ndata: {json.dumps({'message': 'Generation stopped by user'})}\n\n"
+                    break
+                yield f"event: {event_type}\ndata: {json.dumps(event_data)}\n\n"
+        except Exception as e:
+            logger.error(f"MoE hypotheses streaming error: {e}", exc_info=True)
+            yield f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
+        finally:
+            cancel_event.set()
+            monitor_task.cancel()
+            try:
+                await monitor_task
+            except asyncio.CancelledError:
+                pass
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 # ============================================================
 # CONTEXT ENGINE (Phase 4: Smart Reading & Context)

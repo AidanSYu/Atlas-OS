@@ -54,6 +54,15 @@ semantic-text-splitter>=0.18.0  # Rust-based semantic chunking (sentence boundar
 # Phase B4: RAPTOR Hierarchical Summarization
 scikit-learn>=1.3.0      # KMeans clustering for RAPTOR hierarchy
 
+# Phase 3.0: Hybrid LLM Layer (API model support)
+litellm>=1.30.0           # Universal API router (DeepSeek, MiniMax, OpenAI, etc.)
+
+# Phase 3.0: Hybrid Retrieval (BM25 + RRF)
+bm25s>=0.2.0              # Fast sparse keyword retrieval (BM25)
+
+# Phase 3.0: MoE Expert Tools
+duckduckgo-search>=6.0.0  # Web fallback for Retrieval Expert
+
 # Testing
 pytest>=7.4.0
 pytest-asyncio>=0.23.0

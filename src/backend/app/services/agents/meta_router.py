@@ -52,11 +52,20 @@ Respond with ONLY the category name:"""
         return "DEEP_DISCOVERY"
 
 async def ensure_optimal_model(intent: str, llm_service: LLMService) -> None:
-    """Swap to the optimal model for the task if needed."""
+    """Swap to the optimal local model for the task if needed.
+
+    Skips model swapping when an API model is active — the user explicitly
+    chose a cloud model and we should not override that with a local GGUF.
+    """
     try:
+        # Never override the user's API model choice
+        if getattr(llm_service, "_model_source", "local") == "api":
+            logger.debug("Skipping model swap: API model is active")
+            return
+
         available = llm_service.list_available_models()
         current = llm_service.active_model_name
-        
+
         if not available:
             return
 

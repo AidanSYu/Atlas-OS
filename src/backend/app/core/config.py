@@ -4,13 +4,20 @@ from pydantic import Field
 from pathlib import Path
 
 
-def _get_models_dir() -> str:
-    """Get the absolute path to the models directory."""
-    # config.py is at: project/backend/app/core/config.py
-    # So parent.parent.parent gets us to project root
-    backend_dir = Path(__file__).resolve().parent.parent.parent
-    return str(backend_dir / "models")
+def _get_backend_dir() -> Path:
+    return Path(__file__).resolve().parent.parent.parent
 
+def _get_models_dir() -> str:
+    return str(_get_backend_dir() / "models")
+
+def _get_db_path() -> str:
+    return str(_get_backend_dir() / "atlas.db")
+
+def _get_qdrant_path() -> str:
+    return str(_get_backend_dir() / "qdrant_storage")
+
+def _get_upload_dir() -> str:
+    return str(_get_backend_dir() / "data" / "uploads")
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
@@ -22,7 +29,7 @@ class Settings(BaseSettings):
     )
 
     # SQLite Configuration (embedded - no external server)
-    DATABASE_PATH: str = "./atlas.db"
+    DATABASE_PATH: str = Field(default_factory=_get_db_path)
     
     @property
     def database_url(self) -> str:
@@ -30,15 +37,14 @@ class Settings(BaseSettings):
         return f"sqlite:///{self.DATABASE_PATH}"
     
     # Qdrant Configuration (embedded - runs in-process via path mode)
-    QDRANT_STORAGE_PATH: str = "./qdrant_storage"
+    QDRANT_STORAGE_PATH: str = Field(default_factory=_get_qdrant_path)
     QDRANT_COLLECTION: str = "atlas_documents"
     
     # Model Storage (for bundled LLM and NER models)
-    # Uses absolute path relative to project root
     MODELS_DIR: str = Field(default_factory=_get_models_dir)
     
     # File Storage
-    UPLOAD_DIR: str = "./data/uploads"
+    UPLOAD_DIR: str = Field(default_factory=_get_upload_dir)
     
     # API Configuration
     API_HOST: str = "127.0.0.1"
@@ -85,6 +91,34 @@ class Settings(BaseSettings):
     LLM_USE_MLOCK: bool = True             # Keep model weights pinned in RAM (prevents swapping)
     LLM_VERBOSE: bool = False              # Disable verbose llama.cpp logging in production
 
+    # Atlas 3.0: Hybrid LLM Layer (Phase 1 - API Model Support)
+    # API keys for cloud models (optional - leave empty for local-only mode)
+    DEEPSEEK_API_KEY: str = ""             # DeepSeek V3/R1 API key
+    MINIMAX_API_KEY: str = ""              # MiniMax 2.5 API key
+    OPENAI_API_KEY: str = ""               # OpenAI API key (optional)
+    ANTHROPIC_API_KEY: str = ""            # Anthropic API key (optional)
+
+    # Cloud model registry: models available when API keys are configured
+    # Format: "provider/model-name" as used by LiteLLM
+    CLOUD_MODELS: str = "deepseek/deepseek-chat,deepseek/deepseek-reasoner,minimax/MiniMax-M2.5"
+
+    # Default model source preference: "local" or "api"
+    DEFAULT_MODEL_SOURCE: str = "local"
+
+    # Atlas 3.0: GraphRAG Configuration (Phase 2)
+    # Strict ontology for evidence-bound extraction
+    GRAPH_ONTOLOGY_EDGE_TYPES: str = "CAUSES,INHIBITS,ENABLES,PART_OF,RELATED_TO,CONTRADICTS,SUPPORTS,CLINICAL_TRIAL_FOR,TREATS,DIAGNOSES,MEASURED_BY,AUTHORED_BY,PUBLISHED_IN,FUNDED_BY"
+    ENABLE_EVIDENCE_BOUND_EXTRACTION: bool = True   # Require evidence quotes for edges
+    ENABLE_GRAPH_CRITIC: bool = True                 # Validate edges before committing
+
+    # Atlas 3.0: MoE Configuration (Phase 3)
+    MOE_MAX_EXPERT_ROUNDS: int = 5         # Max rounds of expert delegation
+    MOE_HYPOTHESIS_COUNT: int = 3          # Number of hypotheses to generate
+    ENABLE_AUTONOMOUS_MODE: bool = False   # Allow agents to pursue hypotheses without user approval
+
+    # Atlas 3.0: Workspace Configuration (Phase 4)
+    DRAFTS_DIR: str = Field(default_factory=lambda: str(Path(__file__).resolve().parent.parent.parent / "data" / "drafts"))
+
 
 settings = Settings()
 
@@ -92,3 +126,4 @@ settings = Settings()
 Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
 Path(settings.MODELS_DIR).mkdir(parents=True, exist_ok=True)
 Path(settings.QDRANT_STORAGE_PATH).mkdir(parents=True, exist_ok=True)
+Path(settings.DRAFTS_DIR).mkdir(parents=True, exist_ok=True)

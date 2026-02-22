@@ -291,40 +291,45 @@ export default function ContextEngine({
           </div>
         )}
 
-        {/* Related Passages from Other Documents (Phase 4) */}
-        {relatedPassages.length > 0 && (
+        {/* Related Passages from Other Documents (Phase 4) - always show when a doc is selected */}
+        {selectedDocId && (
           <div className="border-b border-border p-3">
             <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
               <ExternalLink className="h-3 w-3" />
               Related in Other Docs
             </div>
-            <div className="space-y-1.5">
-              {relatedPassages.slice(0, 4).map((passage, i) => (
-                <button
-                  key={`${passage.chunk_id}-${i}`}
-                  onClick={() => onCitationClick(passage.source, passage.page, passage.doc_id)}
-                  className="w-full rounded-lg border border-border bg-background p-2 text-left transition-all hover:border-primary/30 hover:bg-primary/5"
-                >
-                  <p className="text-[10px] text-foreground/70 leading-relaxed line-clamp-2">
-                    {passage.text}
-                  </p>
-                  <div className="mt-1 flex items-center gap-2">
-                    <span className="truncate text-[10px] font-medium text-primary">
-                      {passage.source}
-                    </span>
-                    <span className="text-[9px] text-muted-foreground">p.{passage.page}</span>
-                    <span className="ml-auto text-[9px] text-muted-foreground">
-                      {Math.round(passage.score * 100)}%
-                    </span>
-                  </div>
-                </button>
-              ))}
-            </div>
-            {contextLoading && (
-              <div className="mt-1.5 flex items-center gap-1.5">
+            {contextLoading ? (
+              <div className="flex items-center gap-1.5 py-2">
                 <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
                 <span className="text-[10px] text-muted-foreground">Finding connections...</span>
               </div>
+            ) : relatedPassages.length > 0 ? (
+              <div className="space-y-1.5">
+                {relatedPassages.slice(0, 4).map((passage, i) => (
+                  <button
+                    key={`${passage.chunk_id}-${i}`}
+                    onClick={() => onCitationClick(passage.source, passage.page, passage.doc_id)}
+                    className="w-full rounded-lg border border-border bg-background p-2 text-left transition-all hover:border-primary/30 hover:bg-primary/5"
+                  >
+                    <p className="text-[10px] text-foreground/70 leading-relaxed line-clamp-2">
+                      {passage.text}
+                    </p>
+                    <div className="mt-1 flex items-center gap-2">
+                      <span className="truncate text-[10px] font-medium text-primary">
+                        {passage.source}
+                      </span>
+                      <span className="text-[9px] text-muted-foreground">p.{passage.page}</span>
+                      <span className="ml-auto text-[9px] text-muted-foreground">
+                        {Math.round(passage.score * 100)}%
+                      </span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="text-[10px] text-muted-foreground py-2">
+                No related passages found in other documents.
+              </p>
             )}
           </div>
         )}

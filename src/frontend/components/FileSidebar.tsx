@@ -10,9 +10,10 @@ interface FileSidebarProps {
   selectedDocId: string | null;
   projectId?: string;
   onIngestionComplete?: () => void;
+  onFileDeleted?: (docId: string) => void;
 }
 
-export default function FileSidebar({ onFileSelect, selectedDocId, projectId, onIngestionComplete }: FileSidebarProps) {
+export default function FileSidebar({ onFileSelect, selectedDocId, projectId, onIngestionComplete, onFileDeleted }: FileSidebarProps) {
   const [files, setFiles] = useState<FileInfo[]>([]);
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -77,6 +78,7 @@ export default function FileSidebar({ onFileSelect, selectedDocId, projectId, on
     if (!confirm('Delete this file?')) return;
     try {
       await api.deleteFile(fileId);
+      onFileDeleted?.(fileId);
       setFiles(prev => prev.filter(f => f.doc_id !== fileId));
     } catch (e) {
       console.error(e);

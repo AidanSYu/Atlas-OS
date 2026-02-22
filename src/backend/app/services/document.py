@@ -7,6 +7,8 @@ import logging
 
 from app.core.database import get_session, Document, DocumentChunk, Node, Edge
 from app.core.config import settings
+from app.core.qdrant_store import get_qdrant_client
+from app.services.bm25_index import get_bm25_service
 
 logger = logging.getLogger(__name__)
 
@@ -111,12 +113,11 @@ class DocumentService:
 
             doc_id_str = str(doc_id)
 
-            # 1. Delete from Qdrant vector store (embedded)
+            # 1. Delete from Qdrant vector store (use shared singleton client)
             try:
-                from qdrant_client import QdrantClient
                 from qdrant_client.models import Filter, FieldCondition, MatchValue
 
-                qdrant_client = QdrantClient(path=settings.QDRANT_STORAGE_PATH)
+                qdrant_client = get_qdrant_client()
 
                 filter_condition = Filter(
                     must=[FieldCondition(key="doc_id", match=MatchValue(value=doc_id_str))]
@@ -146,6 +147,13 @@ class DocumentService:
                     logger.info(f"Deleted {len(point_ids)} vectors from Qdrant for doc {doc_id_str}")
             except Exception as e:
                 logger.warning(f"Error deleting from Qdrant for doc {doc_id_str}: {e}")
+
+            # 1.5. Remove from BM25 sparse index
+            try:
+                get_bm25_service().remove_document(doc_id_str)
+                logger.info(f"Removed doc {doc_id_str} from BM25 index")
+            except Exception as e:
+                logger.warning(f"Error removing from BM25 index for doc {doc_id_str}: {e}")
 
             # 2. Delete document chunks
             try:

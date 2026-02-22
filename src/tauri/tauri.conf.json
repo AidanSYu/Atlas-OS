@@ -3,7 +3,7 @@
   "build": {
     "beforeBuildCommand": "npm run build",
     "beforeDevCommand": "npm run dev",
-    "devPath": "http://localhost:3000",
+    "devPath": "http://localhost:3001",
     "distDir": "../frontend/out"
   },
   "package": {
@@ -28,7 +28,10 @@
       },
       "fs": {
         "all": true,
-        "scope": ["$APP/**", "$RESOURCE/**"]
+        "scope": [
+          "$APP/**",
+          "$RESOURCE/**"
+        ]
       },
       "dialog": {
         "all": true
@@ -68,7 +71,9 @@
         "resources/*"
       ],
       "shortDescription": "AI-Native Knowledge Management",
-      "targets": ["nsis"],
+      "targets": [
+        "nsis"
+      ],
       "windows": {
         "certificateThumbprint": null,
         "digestAlgorithm": "sha256",

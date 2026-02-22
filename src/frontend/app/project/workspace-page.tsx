@@ -10,10 +10,12 @@ import DualAgentChat from '@/components/DualAgentChat';
 import EditorPane from '@/components/EditorPane';
 import ContextEngine from '@/components/ContextEngine';
 import { OmniBar } from '@/components/OmniBar';
-import { api, ModelStatusResponse, ProjectInfo } from '@/lib/api';
+import { ResearchCanvas } from '@/components/ResearchCanvas';
+import { WelcomeTour } from '@/components/WelcomeTour';
+import { api, ModelStatusResponse, ModelRegistryResponse, ProjectInfo } from '@/lib/api';
 import { useChatStore } from '@/stores/chatStore';
 import { useGraphStore } from '@/stores/graphStore';
-import { toastError } from '@/stores/toastStore';
+import { toastError, toast, toastSuccess } from '@/stores/toastStore';
 import {
   FileText,
   ChevronLeft,
@@ -28,15 +30,23 @@ import {
   ChevronsRight,
   Zap,
   Activity,
+  Download,
+  ChevronDown,
+  FileCode,
+  Layers,
+  Settings,
 } from 'lucide-react';
 
-type MainView = 'document' | 'editor' | 'graph' | 'chat';
+import SettingsModal from '@/components/SettingsModal';
+
+type MainView = 'document' | 'editor' | 'graph' | 'chat' | 'canvas';
 
 const VIEW_TABS: { key: MainView; label: string; icon: typeof FileText }[] = [
   { key: 'document', label: 'Documents', icon: BookOpen },
   { key: 'editor', label: 'Editor', icon: PenTool },
   { key: 'graph', label: 'Graph', icon: Network },
   { key: 'chat', label: 'Deep Chat', icon: MessageSquare },
+  { key: 'canvas', label: 'Canvas', icon: Layers },
 ];
 
 export default function ProjectWorkspacePage() {
@@ -54,13 +64,15 @@ export default function ProjectWorkspacePage() {
   const [selectedFilename, setSelectedFilename] = useState<string | null>(null);
   const [pdfPage, setPdfPage] = useState(1);
   const [activeView, setActiveView] = useState<MainView>('document');
-  const [chatMode, setChatMode] = useState<'librarian' | 'cortex'>('librarian');
+  const [chatMode, setChatMode] = useState<'librarian' | 'cortex' | 'moe'>('librarian');
 
   const [contextCollapsed, setContextCollapsed] = useState(false);
-  const [llmModels, setLlmModels] = useState<string[]>([]);
+  const [modelRegistry, setModelRegistry] = useState<ModelRegistryResponse | null>(null);
   const [modelStatus, setModelStatus] = useState<ModelStatusResponse | null>(null);
   const [modelLoading, setModelLoading] = useState(false);
   const [deletingProject, setDeletingProject] = useState(false);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const [centerDimensions, setCenterDimensions] = useState({ width: 800, height: 600 });
 
@@ -115,13 +127,13 @@ export default function ProjectWorkspacePage() {
     return () => window.removeEventListener('resize', updateDimensions);
   }, []);
 
-  // Load model controls
+  // Load model controls (registry = local + cloud API models)
   useEffect(() => {
     const loadModelControls = async () => {
       try {
-        const [models, status] = await Promise.all([api.listModels(), api.getModelStatus()]);
-        setLlmModels(models.llm.map((entry) => entry.name));
-        setModelStatus(status);
+        const registry = await api.getModelRegistry();
+        setModelRegistry(registry);
+        setModelStatus(registry.active);
       } catch (err) {
         console.error('Failed to load model controls:', err);
       }
@@ -131,8 +143,9 @@ export default function ProjectWorkspacePage() {
 
     const interval = window.setInterval(async () => {
       try {
-        const status = await api.getModelStatus();
-        setModelStatus(status);
+        const registry = await api.getModelRegistry();
+        setModelRegistry(registry);
+        setModelStatus(registry.active);
       } catch {
         // Transient backend unavailability
       }
@@ -140,6 +153,14 @@ export default function ProjectWorkspacePage() {
 
     return () => window.clearInterval(interval);
   }, []);
+
+  // Close export menu on outside click
+  useEffect(() => {
+    if (!exportMenuOpen) return;
+    const handleClick = () => setExportMenuOpen(false);
+    document.addEventListener('click', handleClick);
+    return () => document.removeEventListener('click', handleClick);
+  }, [exportMenuOpen]);
 
   const handleModelChange = async (modelName: string) => {
     if (!modelName || modelStatus?.active_model === modelName) return;
@@ -184,6 +205,13 @@ export default function ProjectWorkspacePage() {
     setActiveView('document');
   };
 
+  const handleFileDeleted = useCallback((docId: string) => {
+    if (docId === selectedDocId) {
+      setSelectedDocId(null);
+      setSelectedFilename(null);
+    }
+  }, [selectedDocId]);
+
   const handleCitationClick = (filename: string, page: number, docId?: string) => {
     if (docId) {
       setSelectedDocId(docId);
@@ -206,8 +234,76 @@ export default function ProjectWorkspacePage() {
   };
 
   const handleExport = async (type: 'bibtex' | 'markdown' | 'chat') => {
-    // Placeholder for Phase 6D - will be implemented with full export functionality
-    console.log('Export:', type);
+    try {
+      toast(`Exporting ${type}...`, 'info');
+
+      if (type === 'bibtex') {
+        const blob = await api.exportBibtexProject(projectId);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${currentProject?.name || 'atlas-project'}.bib`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        toastSuccess('BibTeX export complete');
+      } else if (type === 'markdown') {
+        // Get editor content from localStorage or EditorPane
+        const editorContent = localStorage.getItem(`atlas-editor-${projectId}`) || '';
+        if (!editorContent.trim()) {
+          toastError('No editor content to export');
+          return;
+        }
+
+        const result = await api.exportMarkdown({
+          content: editorContent,
+          citations: [],
+          projectId: projectId,
+          title: currentProject?.name || 'Research Synthesis',
+          author: 'Atlas User',
+          style: 'apa',
+        });
+
+        // Download the markdown file
+        const blob = new Blob([result.markdown], { type: 'text/markdown' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = result.filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        toastSuccess('Markdown export complete');
+      } else if (type === 'chat') {
+        const cortexMessages = useChatStore.getState().cortexMessages;
+        const librarianMessages = useChatStore.getState().librarianMessages;
+        const allMessages = [...cortexMessages, ...librarianMessages].sort(
+          (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+        );
+
+        if (allMessages.length === 0) {
+          toastError('No chat history to export');
+          return;
+        }
+
+        const result = await api.exportChatHistory(allMessages, currentProject?.name);
+
+        const blob = new Blob([result.markdown], { type: 'text/markdown' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${currentProject?.name || 'chat'}-history.md`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        toastSuccess('Chat history exported');
+      }
+    } catch (error: any) {
+      toastError(`Export failed: ${error.message}`);
+    }
   };
 
   const handleViewSwitch = (view: MainView) => {
@@ -283,20 +379,35 @@ export default function ProjectWorkspacePage() {
             )}
           </div>
 
-          {/* Model Selector */}
+          {/* Model Selector (Local + Cloud API from registry) */}
           <label className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Model</label>
           <select
             value={modelStatus?.active_model || ''}
             onChange={(event) => handleModelChange(event.target.value)}
-            disabled={modelLoading || llmModels.length === 0}
+            disabled={modelLoading || ((modelRegistry?.local?.length ?? 0) + (modelRegistry?.api?.length ?? 0)) === 0}
             className="h-8 min-w-[200px] rounded-lg border border-border bg-surface px-2.5 text-xs text-foreground outline-none transition-colors focus:border-primary/50 focus:ring-1 focus:ring-primary/25 disabled:opacity-60"
           >
-            {llmModels.length === 0 && <option value="">No models found</option>}
-            {llmModels.map((modelName) => (
-              <option key={modelName} value={modelName}>
-                {modelName}
-              </option>
-            ))}
+            {((modelRegistry?.local?.length ?? 0) + (modelRegistry?.api?.length ?? 0)) === 0 && (
+              <option value="">No models found</option>
+            )}
+            {modelRegistry?.local && modelRegistry.local.length > 0 && (
+              <optgroup label="Local">
+                {modelRegistry.local.map((m) => (
+                  <option key={m.name} value={m.name}>
+                    {m.name}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {modelRegistry?.api && modelRegistry.api.length > 0 && (
+              <optgroup label="Cloud API">
+                {modelRegistry.api.map((m) => (
+                  <option key={m.name} value={m.name}>
+                    {m.name}{m.has_key === false ? ' (no API key)' : ''}
+                  </option>
+                ))}
+              </optgroup>
+            )}
           </select>
 
           <div className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 text-xs text-muted-foreground">
@@ -307,6 +418,79 @@ export default function ProjectWorkspacePage() {
             )}
             <span>{(modelStatus?.device || 'unknown').toUpperCase()}</span>
           </div>
+
+          {/* Settings Button */}
+          <button
+            onClick={() => setSettingsOpen(true)}
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-surface text-muted-foreground transition-colors hover:bg-primary/10 hover:border-primary/30 hover:text-primary ml-2"
+            title="Configure API Keys"
+          >
+            <Settings className="h-4 w-4" />
+          </button>
+
+          {/* Export Dropdown */}
+          <div className="relative">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setExportMenuOpen(!exportMenuOpen);
+              }}
+              className="flex h-8 items-center gap-2 rounded-lg border border-border bg-surface px-3 text-xs text-foreground transition-colors hover:bg-surface/80 hover:border-primary/30"
+            >
+              <Download className="h-3.5 w-3.5" />
+              Export
+              <ChevronDown className={`h-3 w-3 transition-transform ${exportMenuOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            {exportMenuOpen && (
+              <div className="absolute right-0 top-full mt-1 w-52 rounded-lg border border-border bg-card shadow-xl z-50 overflow-hidden">
+                <div className="p-1">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleExport('bibtex');
+                      setExportMenuOpen(false);
+                    }}
+                    className="w-full flex items-center gap-2.5 rounded-md px-3 py-2.5 text-xs text-foreground hover:bg-primary/10 transition-colors"
+                  >
+                    <FileCode className="h-4 w-4 text-primary" />
+                    <div className="flex-1 text-left">
+                      <div className="font-medium">BibTeX</div>
+                      <div className="text-[10px] text-muted-foreground">Bibliography file (.bib)</div>
+                    </div>
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleExport('markdown');
+                      setExportMenuOpen(false);
+                    }}
+                    className="w-full flex items-center gap-2.5 rounded-md px-3 py-2.5 text-xs text-foreground hover:bg-primary/10 transition-colors"
+                  >
+                    <FileText className="h-4 w-4 text-accent" />
+                    <div className="flex-1 text-left">
+                      <div className="font-medium">Markdown</div>
+                      <div className="text-[10px] text-muted-foreground">Editor content (.md)</div>
+                    </div>
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleExport('chat');
+                      setExportMenuOpen(false);
+                    }}
+                    className="w-full flex items-center gap-2.5 rounded-md px-3 py-2.5 text-xs text-foreground hover:bg-primary/10 transition-colors"
+                  >
+                    <MessageSquare className="h-4 w-4 text-success" />
+                    <div className="flex-1 text-left">
+                      <div className="font-medium">Chat History</div>
+                      <div className="text-[10px] text-muted-foreground">Conversation log (.md)</div>
+                    </div>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
@@ -314,13 +498,14 @@ export default function ProjectWorkspacePage() {
       <PanelGroup direction="horizontal" className="min-h-0 flex-1">
         {/* ---- Left: Library Sidebar ---- */}
         <Panel defaultSize={18} minSize={14} maxSize={26} className="border-r border-border bg-card">
-          <div className="flex h-full flex-col">
+          <div id="atlas-library-sidebar" className="flex h-full flex-col">
             <div className="min-h-0 flex-1 overflow-hidden">
               <LibrarySidebar
                 onFileSelect={handleFileSelect}
                 selectedDocId={selectedDocId}
                 projectId={currentProject.id}
                 onIngestionComplete={handleIngestionComplete}
+                onFileDeleted={handleFileDeleted}
               />
             </div>
             {/* Project Actions */}
@@ -347,7 +532,7 @@ export default function ProjectWorkspacePage() {
         <Panel defaultSize={contextCollapsed ? 60 : 52} minSize={35}>
           <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
             {/* Tab Bar */}
-            <div className="flex shrink-0 items-center gap-1 border-b border-border bg-card/50 px-3 py-1.5">
+            <div id="atlas-view-tabs" className="flex shrink-0 items-center gap-1 border-b border-border bg-card/50 px-3 py-1.5">
               {VIEW_TABS.map((tab) => {
                 const Icon = tab.icon;
                 const isActive = activeView === tab.key;
@@ -355,11 +540,10 @@ export default function ProjectWorkspacePage() {
                   <button
                     key={tab.key}
                     onClick={() => setActiveView(tab.key)}
-                    className={`relative inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${
-                      isActive
-                        ? 'bg-primary/10 text-primary border border-primary/20'
-                        : 'text-muted-foreground hover:text-foreground hover:bg-surface border border-transparent'
-                    }`}
+                    className={`relative inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${isActive
+                      ? 'bg-primary/10 text-primary border border-primary/20'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-surface border border-transparent'
+                      }`}
                   >
                     <Icon className="h-3.5 w-3.5" />
                     {tab.label}
@@ -419,6 +603,9 @@ export default function ProjectWorkspacePage() {
                   />
                 </div>
               )}
+
+              {/* Research Canvas View */}
+              {activeView === 'canvas' && <ResearchCanvas projectId={currentProject.id} />}
             </div>
           </div>
         </Panel>
@@ -428,7 +615,7 @@ export default function ProjectWorkspacePage() {
 
         {!contextCollapsed && (
           <Panel defaultSize={22} minSize={18} maxSize={32} className="border-l border-border bg-card">
-            <div className="flex h-full flex-col">
+            <div id="atlas-context-engine" className="flex h-full flex-col">
               <div className="flex items-center justify-between border-b border-border px-3 py-2">
                 <div className="flex items-center gap-2">
                   <div className="h-1.5 w-1.5 rounded-full bg-accent" />
@@ -475,6 +662,12 @@ export default function ProjectWorkspacePage() {
         onExport={handleExport}
         onSwitchView={handleViewSwitch}
       />
+
+      {/* Welcome Tour - First-time onboarding */}
+      <WelcomeTour />
+
+      {/* Settings Modal */}
+      <SettingsModal open={settingsOpen} onOpenChange={setSettingsOpen} />
     </main>
   );
 }

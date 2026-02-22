@@ -90,6 +90,7 @@ class RerankService:
                     "relevance_score": score,
                     "rerank_score": score,
                     "original_score": float(orig) if orig is not None else None,
+                    "score": score,
                 })
 
             # Sort by relevance_score

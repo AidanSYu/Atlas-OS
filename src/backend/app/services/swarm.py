@@ -26,7 +26,7 @@ import asyncio
 import json
 import logging
 import re
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, TypedDict
 
 import networkx as nx
 import rustworkx as rx
@@ -2219,25 +2219,32 @@ async def run_swarm_query(
 
     # Execute
     # Use project_id as thread_id for session persistence (Phase 1.5)
-    # In a real app, this would be a unique session_id passed from the frontend
     config = {"configurable": {"thread_id": project_id}}
-    
-    final_state = await graph.ainvoke(
-        _sanitize_state(initial_state), config=config
-    )
+
+    try:
+        final_state = await graph.ainvoke(
+            _sanitize_state(initial_state), config=config
+        )
+    except Exception as e:
+        logger.exception(f"Swarm graph execution failed (brain={brain_name})")
+        raise RuntimeError(f"{brain_name} execution failed: {e!s}") from e
 
     # Step 4: Build response (Navigator 2.0 includes additional fields)
-    conf = final_state.get("confidence_score")
-    return {
-        "brain_used": brain_name,
-        "hypothesis": final_state.get("final_answer") or final_state.get("hypothesis") or final_state.get("answer", ""),
-        "evidence": final_state.get("evidence", []) or final_state.get("citations", []),
-        "reasoning_trace": final_state.get("reasoning_trace", []),
-        "status": final_state.get("status", "unknown"),
-        "confidence_score": float(conf) if conf is not None else None,
-        "iterations": final_state.get("iteration_count"),
-        "contradictions": final_state.get("identified_contradictions", []),
-    }
+    try:
+        conf = final_state.get("confidence_score")
+        return {
+            "brain_used": brain_name,
+            "hypothesis": final_state.get("final_answer") or final_state.get("hypothesis") or final_state.get("answer", ""),
+            "evidence": final_state.get("evidence", []) or final_state.get("citations", []),
+            "reasoning_trace": final_state.get("reasoning_trace", []),
+            "status": final_state.get("status", "unknown"),
+            "confidence_score": float(conf) if conf is not None else None,
+            "iterations": final_state.get("iteration_count"),
+            "contradictions": final_state.get("identified_contradictions", []),
+        }
+    except Exception as e:
+        logger.exception(f"Swarm response build failed (brain={brain_name})")
+        raise RuntimeError(f"{brain_name} response build failed: {e!s}") from e
 
 # ============================================================
 # STREAMING EXECUTION (Phase 2)
@@ -2270,6 +2277,7 @@ async def run_swarm_query_streaming(
     llm_service: LLMService,
     qdrant_client: QdrantClient,
     collection_name: str,
+    cancel_event: Optional[asyncio.Event] = None,
 ):
     """Streaming version of run_swarm_query.
 
@@ -2280,9 +2288,13 @@ async def run_swarm_query_streaming(
     import uuid
 
     # Step 1: Route
+    if cancel_event and cancel_event.is_set():
+        return
     intent = await route_intent(query, llm_service)
-    
+
     # Phase 1 cleanup: Ensure we use the best model for this intent
+    if cancel_event and cancel_event.is_set():
+        return
     if hasattr(llm_service, "load_model"):
         await ensure_optimal_model(intent, llm_service)
 
@@ -2421,8 +2433,12 @@ async def run_swarm_query_streaming(
 
     # Step 3: Stream Execution
     async for event in compiled.astream_events(_sanitize_state(initial_state), config=config, version="v2"):
+        if cancel_event and cancel_event.is_set():
+            logger.info("Swarm streaming cancelled by user")
+            return
+
         kind = event["event"]
-        
+
         if kind == "on_chain_start":
             node_name = event.get("name", "")
             # Filter out internal/wrapper nodes
@@ -2483,14 +2499,18 @@ async def run_swarm_query_streaming(
                     yield ("graph_analysis", graph_data)
 
     # Step 4: Emit Final Result
+    if cancel_event and cancel_event.is_set():
+        logger.info("Swarm cancelled before final result emission")
+        return
+
     # We need to fetch the final state to get the complete answer
     final_snapshot = await compiled.aget(config)
     final_state = final_snapshot.values if final_snapshot else {}
-    
-    # If final_state is empty (graph failed?), try to use initial_state updated? 
+
+    # If final_state is empty (graph failed?), try to use initial_state updated?
     # astream_events doesn't return the final state directly.
     # But checking snapshot is reliable.
-    
+
     conf = final_state.get("confidence_score")
     yield ("complete", {
         "hypothesis": final_state.get("final_answer") or final_state.get("hypothesis") or final_state.get("answer", ""),
@@ -2501,3 +2521,282 @@ async def run_swarm_query_streaming(
         "status": final_state.get("status", "completed"),
         "session_id": thread_id
     })
+
+
+# ============================================================
+# ATLAS 3.0: MIXTURE OF EXPERTS (MoE) EXECUTION
+# ============================================================
+
+async def run_moe_query(
+    query: str,
+    project_id: str,
+    graph_service: GraphService,
+    llm_service: LLMService,
+    qdrant_client: QdrantClient,
+    collection_name: str,
+) -> Dict[str, Any]:
+    """Run the Atlas 3.0 Mixture of Experts pipeline on a query.
+
+    The MoE pipeline uses a Supervisor agent to orchestrate specialized
+    Expert agents (Hypothesis, Retrieval, Writer, Critic) in a dynamic
+    multi-turn research workflow.
+
+    Args:
+        query: User's research question
+        project_id: Project scope
+        graph_service: GraphService instance
+        llm_service: LLMService instance
+        qdrant_client: Embedded QdrantClient
+        collection_name: Qdrant collection name
+
+    Returns:
+        Dict with brain_used, hypothesis, evidence, reasoning_trace, status,
+        confidence_score, hypotheses (list of generated hypotheses)
+    """
+    from app.services.agents.supervisor import build_moe_graph, MoEState
+
+    logger.info(f"Running MoE pipeline for query: {query[:100]}...")
+
+    # Build the MoE graph
+    sg = build_moe_graph(
+        llm_service=llm_service,
+        graph_service=graph_service,
+        qdrant_client=qdrant_client,
+        collection_name=collection_name,
+    )
+
+    # Compile with memory
+    memory = await get_memory_saver()
+    compiled = sg.compile(checkpointer=memory)
+
+    # Initial state
+    initial_state: MoEState = {
+        "query": query,
+        "project_id": project_id,
+        "intent": "",
+        "sub_tasks": [],
+        "current_round": 0,
+        "max_rounds": settings.MOE_MAX_EXPERT_ROUNDS,
+        "hypotheses": [],
+        "selected_hypothesis": "",
+        "retrieved_evidence": [],
+        "retrieval_queries": [],
+        "draft": "",
+        "draft_version": 0,
+        "grounding_results": [],
+        "ungrounded_claims": [],
+        "audit_verdict": "",
+        "final_answer": "",
+        "evidence": [],
+        "reasoning_trace": ["[MoE] Starting Mixture of Experts pipeline"],
+        "confidence_score": 0.0,
+        "status": "running",
+    }
+
+    config = {"configurable": {"thread_id": project_id}}
+
+    final_state = await compiled.ainvoke(
+        _sanitize_state(initial_state), config=config
+    )
+
+    conf = final_state.get("confidence_score")
+    return {
+        "brain_used": "moe_supervisor",
+        "hypothesis": final_state.get("final_answer", ""),
+        "evidence": final_state.get("retrieved_evidence", []),
+        "reasoning_trace": final_state.get("reasoning_trace", []),
+        "status": final_state.get("status", "unknown"),
+        "confidence_score": float(conf) if conf is not None else None,
+        "iterations": final_state.get("current_round", 0),
+        "contradictions": final_state.get("ungrounded_claims", []),
+        "hypotheses": final_state.get("hypotheses", []),
+    }
+
+
+async def run_moe_query_streaming(
+    query: str,
+    project_id: str,
+    session_id: Optional[str],
+    graph_service: GraphService,
+    llm_service: LLMService,
+    qdrant_client: QdrantClient,
+    collection_name: str,
+    cancel_event: Optional[asyncio.Event] = None,
+):
+    """Streaming version of run_moe_query.
+
+    Yields (event_type, event_data) tuples as the MoE graph executes.
+    """
+    import uuid as _uuid
+    from app.services.agents.supervisor import build_moe_graph, MoEState
+
+    logger.info(f"Running MoE streaming pipeline for: {query[:100]}...")
+
+    yield ("routing", {"brain": "moe_supervisor", "intent": "MoE"})
+
+    # Build the MoE graph
+    sg = build_moe_graph(
+        llm_service=llm_service,
+        graph_service=graph_service,
+        qdrant_client=qdrant_client,
+        collection_name=collection_name,
+    )
+
+    memory = await get_memory_saver()
+    compiled = sg.compile(checkpointer=memory)
+
+    initial_state: MoEState = {
+        "query": query,
+        "project_id": project_id,
+        "intent": "",
+        "sub_tasks": [],
+        "current_round": 0,
+        "max_rounds": settings.MOE_MAX_EXPERT_ROUNDS,
+        "hypotheses": [],
+        "selected_hypothesis": "",
+        "retrieved_evidence": [],
+        "retrieval_queries": [],
+        "draft": "",
+        "draft_version": 0,
+        "grounding_results": [],
+        "ungrounded_claims": [],
+        "audit_verdict": "",
+        "final_answer": "",
+        "evidence": [],
+        "reasoning_trace": ["[MoE] Starting Mixture of Experts pipeline"],
+        "confidence_score": 0.0,
+        "status": "running",
+    }
+
+    thread_id = session_id or str(_uuid.uuid4())
+    config = {"configurable": {"thread_id": thread_id}}
+
+    # MoE progress messages
+    moe_progress = {
+        "plan": "Supervisor analyzing query and planning research strategy...",
+        "hypothesis": "Hypothesis Expert generating research hypotheses...",
+        "retrieve": "Retrieval Expert searching documents and knowledge graph...",
+        "write": "Writer Expert drafting evidence-based synthesis...",
+        "audit": "Grounding Auditor verifying claims against sources...",
+        "synthesize": "Supervisor producing final answer...",
+    }
+
+    async for event in compiled.astream_events(_sanitize_state(initial_state), config=config, version="v2"):
+        if cancel_event and cancel_event.is_set():
+            logger.info("MoE streaming cancelled by user")
+            return
+
+        kind = event["event"]
+
+        if kind == "on_chain_start":
+            node_name = event.get("name", "")
+            if node_name in moe_progress:
+                yield ("progress", {
+                    "node": node_name,
+                    "message": moe_progress[node_name],
+                })
+
+        elif kind == "on_chain_end":
+            node_name = event.get("name", "")
+            output = event.get("data", {}).get("output", {})
+
+            if not isinstance(output, dict):
+                continue
+
+            # Emit reasoning trace
+            trace = output.get("reasoning_trace", [])
+            if trace:
+                yield ("thinking", {"content": trace[-1] if trace else ""})
+
+            # Emit hypotheses when generated
+            hypotheses = output.get("hypotheses", [])
+            if hypotheses and node_name == "hypothesis":
+                yield ("hypotheses", {
+                    "items": hypotheses,
+                    "selected": output.get("selected_hypothesis", ""),
+                })
+
+            # Emit evidence updates
+            evidence = output.get("retrieved_evidence", [])
+            if evidence and node_name == "retrieve":
+                yield ("evidence", {"items": evidence[-5:], "count": len(evidence)})
+
+            # Emit grounding results
+            if node_name == "audit":
+                grounding = output.get("grounding_results", [])
+                verdict = output.get("audit_verdict", "")
+                if grounding or verdict:
+                    yield ("grounding", {
+                        "results": grounding,
+                        "verdict": verdict,
+                        "ungrounded": output.get("ungrounded_claims", []),
+                    })
+
+    # Final result
+    if cancel_event and cancel_event.is_set():
+        logger.info("MoE cancelled before final result emission")
+        return
+
+    final_snapshot = await compiled.aget(config)
+    final_state = final_snapshot.values if final_snapshot else {}
+
+    conf = final_state.get("confidence_score")
+    yield ("complete", {
+        "hypothesis": final_state.get("final_answer", ""),
+        "evidence": final_state.get("retrieved_evidence", []),
+        "confidence_score": float(conf) if conf is not None else None,
+        "reasoning_trace": final_state.get("reasoning_trace", []),
+        "brain_used": "moe_supervisor",
+        "status": final_state.get("status", "completed"),
+        "session_id": thread_id,
+        "hypotheses": final_state.get("hypotheses", []),
+    })
+
+async def generate_moe_hypotheses(
+    query: str,
+    project_id: str,
+    session_id: Optional[str],
+    graph_service: 'GraphService',
+    llm_service: 'LLMService',
+    cancel_event: Optional[asyncio.Event] = None,
+) -> AsyncGenerator[Tuple[str, Any], None]:
+    """Atlas 3.0: Step 1 of interactive MoE workflow.
+    Runs Supervisor (Plan) -> Hypothesis Expert only, returning hypotheses.
+    """
+    from app.services.agents.supervisor import supervisor_plan
+    from app.services.agents.experts.hypothesis import hypothesis_generate
+
+    initial_state = {
+        "query": query,
+        "project_id": project_id,
+        "reasoning_trace": [],
+    }
+
+    yield "routing", {"brain": "moe_supervisor", "intent": "Hypothesis Generation"}
+
+    try:
+        # 1. Supervisor Plan
+        if cancel_event and cancel_event.is_set():
+            return
+        yield "progress", {"node": "supervisor", "message": "Analyzing query and planning approach..."}
+        yield "thinking", {"content": "Supervisor analyzing query to determine intent..."}
+        state_after_plan = await supervisor_plan(initial_state, llm_service)
+
+        if cancel_event and cancel_event.is_set():
+            return
+        intent = state_after_plan.get("intent", "broad_research")
+        yield "thinking", {"content": f"Determined intent: {intent}. Proceeding to Hypothesis Generation."}
+
+        # 2. Hypothesis Generation
+        if cancel_event and cancel_event.is_set():
+            return
+        yield "progress", {"node": "hypothesis", "message": "Generating distinct research hypotheses..."}
+        state_after_hypotheses = await hypothesis_generate(state_after_plan, llm_service, graph_service)
+
+        hypotheses = state_after_hypotheses.get("hypotheses", [])
+        
+        yield "hypotheses", {"items": hypotheses, "selected": state_after_hypotheses.get("selected_hypothesis", query)}
+        
+    except Exception as e:
+        logger.error(f"MoE Hypotheses Generation error: {e}", exc_info=True)
+        yield "error", {"message": str(e)}

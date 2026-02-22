@@ -4,33 +4,38 @@
 
 :root,
 .dark {
-  /* Atlas 3.0 - Deep Space Research OS Palette */
-  /* Backgrounds: deep navy-slate, not pure black */
-  --background: 222 28% 8%;
-  --foreground: 210 20% 93%;
-  --card: 220 25% 11%;
-  --surface: 218 22% 14%;
-  --border: 220 18% 18%;
+  /* ContAInnum / Atlas 3.0 Theme Palette */
+  /* Backgrounds: pure void, not blue-gray */
+  --background: 216 33% 3%;
+  /* #070A0E */
+  --foreground: 216 20% 97%;
+  /* #F2F5F9 */
+  --card: 216 25% 6%;
+  /* slightly lighter void */
+  --surface: 216 20% 10%;
+  --border: 216 15% 18%;
 
-  /* Muted: blue-gray tones */
-  --muted: 220 20% 16%;
-  --muted-foreground: 215 15% 55%;
+  /* Muted: cool gray overlays */
+  --muted: 216 20% 15%;
+  --muted-foreground: 213 18% 70%;
+  /* #9FB0C7 */
 
-  /* Primary: indigo-violet gradient anchor */
-  --primary: 245 58% 58%;
-  --primary-foreground: 0 0% 100%;
+  /* Primary: Crisp white / foreground for high contrast interfaces */
+  --primary: 216 20% 97%;
+  --primary-foreground: 216 33% 3%;
 
-  /* Accent: teal-cyan for interactive elements */
-  --accent: 174 62% 47%;
-  --accent-foreground: 180 10% 98%;
+  /* Accent: "Safety Orange" for interactive attention */
+  --accent: 9 100% 59%;
+  /* #FF4D2E */
+  --accent-foreground: 216 20% 97%;
 
   /* Semantic colors */
   --success: 160 60% 45%;
   --warning: 38 92% 50%;
-  --destructive: 0 72% 51%;
+  --destructive: 0 84% 60%;
   --info: 205 85% 55%;
 
-  /* Graph entity colors */
+  /* Graph entity colors remain slightly adjusted to fit the new void theme */
   --entity-person: 217 80% 68%;
   --entity-org: 168 55% 55%;
   --entity-location: 270 60% 68%;
@@ -40,7 +45,8 @@
   --entity-document: 225 65% 60%;
 
   /* Glow / accent overlay */
-  --glow: 245 100% 70%;
+  --glow: 9 100% 59%;
+  /* Safety Orange */
 }
 
 * {
@@ -55,7 +61,8 @@ html {
 
 @media (max-width: 768px) {
   html {
-    font-size: 14px; /* Slightly larger on mobile */
+    font-size: 14px;
+    /* Slightly larger on mobile */
   }
 }
 
@@ -72,7 +79,12 @@ body {
   font-family: var(--font-inter), sans-serif;
 }
 
-h1, h2, h3, h4, h5, h6 {
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
   font-family: var(--font-serif), serif;
   letter-spacing: -0.01em;
 }
@@ -95,9 +107,11 @@ h1, h2, h3, h4, h5, h6 {
 .glow-sm {
   box-shadow: 0 0 12px -3px hsl(var(--glow) / 0.15);
 }
+
 .glow-md {
   box-shadow: 0 0 24px -4px hsl(var(--glow) / 0.2);
 }
+
 .glow-accent {
   box-shadow: 0 0 16px -4px hsl(var(--accent) / 0.3);
 }
@@ -106,6 +120,7 @@ h1, h2, h3, h4, h5, h6 {
 .gradient-border {
   position: relative;
 }
+
 .gradient-border::before {
   content: '';
   position: absolute;
@@ -123,6 +138,7 @@ h1, h2, h3, h4, h5, h6 {
 .tab-active {
   position: relative;
 }
+
 .tab-active::after {
   content: '';
   position: absolute;
@@ -138,6 +154,7 @@ h1, h2, h3, h4, h5, h6 {
 .resize-handle {
   transition: background-color 150ms ease;
 }
+
 .resize-handle:hover,
 .resize-handle[data-resize-handle-active] {
   background-color: hsl(var(--accent) / 0.5) !important;
@@ -148,15 +165,18 @@ h1, h2, h3, h4, h5, h6 {
   width: 8px;
   height: 8px;
 }
+
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
 ::-webkit-scrollbar-thumb {
   background: hsl(var(--muted));
   border-radius: 4px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
+
 ::-webkit-scrollbar-thumb:hover {
   background: hsl(var(--muted-foreground) / 0.4);
   background-clip: padding-box;
@@ -168,26 +188,43 @@ h1, h2, h3, h4, h5, h6 {
   min-height: 200px;
   padding: 1rem;
 }
+
 .ProseMirror p {
   margin: 0.5em 0;
 }
-.ProseMirror h1, .ProseMirror h2, .ProseMirror h3 {
+
+.ProseMirror h1,
+.ProseMirror h2,
+.ProseMirror h3 {
   font-family: var(--font-serif), serif;
   margin: 1em 0 0.5em;
 }
-.ProseMirror h1 { font-size: 1.5em; }
-.ProseMirror h2 { font-size: 1.25em; }
-.ProseMirror h3 { font-size: 1.1em; }
-.ProseMirror ul, .ProseMirror ol {
+
+.ProseMirror h1 {
+  font-size: 1.5em;
+}
+
+.ProseMirror h2 {
+  font-size: 1.25em;
+}
+
+.ProseMirror h3 {
+  font-size: 1.1em;
+}
+
+.ProseMirror ul,
+.ProseMirror ol {
   padding-left: 1.5em;
   margin: 0.5em 0;
 }
+
 .ProseMirror blockquote {
   border-left: 3px solid hsl(var(--primary) / 0.5);
   padding-left: 1em;
   margin: 0.5em 0;
   color: hsl(var(--muted-foreground));
 }
+
 .ProseMirror code {
   background: hsl(var(--muted));
   padding: 0.1em 0.3em;
@@ -195,16 +232,19 @@ h1, h2, h3, h4, h5, h6 {
   font-family: var(--font-mono), monospace;
   font-size: 0.9em;
 }
+
 .ProseMirror pre {
   background: hsl(var(--muted));
   padding: 0.75em 1em;
   border-radius: 6px;
   overflow-x: auto;
 }
+
 .ProseMirror pre code {
   background: none;
   padding: 0;
 }
+
 .ProseMirror .is-editor-empty:first-child::before {
   content: attr(data-placeholder);
   float: left;
@@ -212,11 +252,13 @@ h1, h2, h3, h4, h5, h6 {
   pointer-events: none;
   height: 0;
 }
+
 .ProseMirror mark {
   background-color: hsl(var(--warning) / 0.3);
   border-radius: 2px;
   padding: 0 2px;
 }
+
 .ProseMirror a {
   color: hsl(var(--accent));
   text-decoration: underline;
@@ -225,25 +267,54 @@ h1, h2, h3, h4, h5, h6 {
 
 /* Pulse animation for streaming indicator */
 @keyframes pulse-glow {
-  0%, 100% { opacity: 0.4; }
-  50% { opacity: 1; }
+
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+
+  50% {
+    opacity: 1;
+  }
 }
+
 .animate-pulse-glow {
   animation: pulse-glow 1.5s ease-in-out infinite;
 }
 
 /* Staggered bounce for loading dots */
-.delay-100 { animation-delay: 100ms; }
-.delay-200 { animation-delay: 200ms; }
+.delay-100 {
+  animation-delay: 100ms;
+}
+
+.delay-200 {
+  animation-delay: 200ms;
+}
 
 /* Toast animations */
 @keyframes slide-in-from-right {
-  from { transform: translateX(100%); opacity: 0; }
-  to { transform: translateX(0); opacity: 1; }
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
 }
-.animate-in { animation: slide-in-from-right 0.3s ease-out; }
-.slide-in-from-right-5 { /* handled by keyframes above */ }
-.fade-in { /* handled by keyframes above */ }
+
+.animate-in {
+  animation: slide-in-from-right 0.3s ease-out;
+}
+
+.slide-in-from-right-5 {
+  /* handled by keyframes above */
+}
+
+.fade-in {
+  /* handled by keyframes above */
+}
 
 /* Command Palette (cmdk) Overrides */
 [cmdk-root] {

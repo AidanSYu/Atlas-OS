@@ -173,21 +173,23 @@ def _resolve_gpu_layers() -> int:
 
 
 class LLMService:
-    """Bundled LLM service using llama-cpp-python and sentence-transformers.
-    
-    This service provides:
-    - Text generation using Llama 3 (quantized GGUF) with proper chat template
-    - Text embeddings using nomic-embed-text-v1.5
-    - Runtime model switching
-    
+    """Hybrid LLM service supporting both local GGUF models and cloud API models.
+
+    Atlas 3.0: This service provides:
+    - Text generation using local Llama/Qwen/Phi GGUF models (llama-cpp-python)
+    - Text generation using cloud APIs via LiteLLM (DeepSeek, MiniMax, OpenAI, etc.)
+    - Text embeddings using nomic-embed-text-v1.5 (always local)
+    - Runtime model switching between local and API models
+
     Models are loaded from the MODELS_DIR specified in settings.
+    API models are routed through LiteLLM when API keys are configured.
     """
-    
+
     _instance: Optional['LLMService'] = None
-    
+
     def __init__(self, models_dir: Optional[Path] = None):
         """Initialize LLM service.
-        
+
         Args:
             models_dir: Path to directory containing models.
                        Defaults to settings.MODELS_DIR.
@@ -207,9 +209,161 @@ class LLMService:
         self._llm_lock = threading.Lock()
         # Lock to prevent concurrent embedding generation (Nomic v1.5 race condition fix)
         self._embed_lock = threading.Lock()
+        # Lock to prevent concurrent embedding MODEL LOADING (race condition:
+        # multiple async requests see _embedder=None and all try to load)
+        self._embed_load_lock = threading.Lock()
         self._is_initializing = False
-        
+
+        # Atlas 3.0: Hybrid LLM Layer - API model support
+        self._model_source: str = "local"  # "local" or "api"
+        self._api_model_name: Optional[str] = None  # e.g., "deepseek/deepseek-chat"
+        self._litellm_available = False
+        self._setup_litellm()
+
         logger.info(f"LLMService initializing with models_dir: {self.models_dir}")
+
+    # ----------------------------------------------------------------
+    # Atlas 3.0: LiteLLM Setup & API Model Support
+    # ----------------------------------------------------------------
+
+    def _setup_litellm(self):
+        """Configure LiteLLM with available API keys."""
+        try:
+            import litellm
+            self._litellm_available = True
+            litellm.set_verbose = False
+
+            # Set API keys from config
+            if settings.DEEPSEEK_API_KEY:
+                os.environ["DEEPSEEK_API_KEY"] = settings.DEEPSEEK_API_KEY
+            if settings.MINIMAX_API_KEY:
+                os.environ["MINIMAX_API_KEY"] = settings.MINIMAX_API_KEY
+            if settings.OPENAI_API_KEY:
+                os.environ["OPENAI_API_KEY"] = settings.OPENAI_API_KEY
+            if settings.ANTHROPIC_API_KEY:
+                os.environ["ANTHROPIC_API_KEY"] = settings.ANTHROPIC_API_KEY
+
+            logger.info("LiteLLM initialized for API model support")
+        except ImportError:
+            logger.info("LiteLLM not installed - API model support disabled")
+            self._litellm_available = False
+
+    def list_available_api_models(self) -> List[Dict[str, str]]:
+        """List cloud API models that have valid API keys configured.
+
+        Returns:
+            List of dicts with 'name', 'provider', and 'requires_key' fields.
+        """
+        if not self._litellm_available:
+            return []
+
+        models = []
+        configured = settings.CLOUD_MODELS.split(",") if settings.CLOUD_MODELS else []
+
+        # Map provider prefixes to their API key settings
+        key_map = {
+            "deepseek": settings.DEEPSEEK_API_KEY,
+            "minimax": settings.MINIMAX_API_KEY,
+            "openai": settings.OPENAI_API_KEY,
+            "anthropic": settings.ANTHROPIC_API_KEY,
+        }
+
+        for model_id in configured:
+            model_id = model_id.strip()
+            if not model_id:
+                continue
+            provider = model_id.split("/")[0] if "/" in model_id else model_id
+            has_key = bool(key_map.get(provider, ""))
+            models.append({
+                "name": model_id,
+                "provider": provider,
+                "has_key": has_key,
+                "source": "api",
+            })
+
+        return models
+
+    async def load_api_model(self, model_name: str) -> str:
+        """Switch to an API model via LiteLLM.
+
+        Args:
+            model_name: LiteLLM model identifier (e.g., "deepseek/deepseek-chat")
+
+        Returns:
+            The active model name.
+
+        Raises:
+            RuntimeError: If LiteLLM is not available or API key is missing.
+        """
+        if not self._litellm_available:
+            raise RuntimeError("LiteLLM not installed. Install with: pip install litellm")
+
+        provider = model_name.split("/")[0] if "/" in model_name else ""
+        key_map = {
+            "deepseek": settings.DEEPSEEK_API_KEY,
+            "minimax": settings.MINIMAX_API_KEY,
+            "openai": settings.OPENAI_API_KEY,
+            "anthropic": settings.ANTHROPIC_API_KEY,
+        }
+
+        if provider in key_map and not key_map[provider]:
+            raise RuntimeError(
+                f"API key for '{provider}' is not configured. "
+                f"Set {provider.upper()}_API_KEY in your .env file."
+            )
+
+        # Unload local model to free VRAM if switching from local
+        if self._model_source == "local" and self._llm is not None and self._llm != "FALLBACK":
+            logger.info(f"Unloading local model to switch to API: {model_name}")
+            del self._llm
+            self._llm = None
+            import gc
+            gc.collect()
+
+        self._model_source = "api"
+        self._api_model_name = model_name
+        self._active_model_name = model_name
+        self._device = "cloud"
+        self._model_type = "api"
+
+        logger.info(f"Switched to API model: {model_name}")
+        return model_name
+
+    async def _generate_via_api(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float = 0.1,
+        max_tokens: int = 2048,
+        response_format: Optional[Dict] = None,
+    ) -> str:
+        """Generate text using a cloud API model via LiteLLM.
+
+        Args:
+            messages: Chat messages in OpenAI format [{role, content}]
+            temperature: Sampling temperature
+            max_tokens: Maximum tokens to generate
+            response_format: Optional response format (e.g., {"type": "json_object"})
+
+        Returns:
+            Generated text string
+        """
+        import litellm
+
+        kwargs: Dict[str, Any] = {
+            "model": self._api_model_name,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if response_format:
+            kwargs["response_format"] = response_format
+
+        try:
+            response = await litellm.acompletion(**kwargs)
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            logger.error(f"API generation failed ({self._api_model_name}): {e}")
+            raise RuntimeError(f"API model generation failed: {e}") from e
     
     # ----------------------------------------------------------------
     # Llama 3 Chat Template
@@ -398,46 +552,56 @@ class LLMService:
         logger.info(f"GPU layers: {self._gpu_layers}, actual device: {self._device}")
     
     def _load_embedder(self):
-        """Load the embedding model (lazy loading)."""
+        """Load the embedding model (lazy loading, thread-safe).
+
+        Uses _embed_load_lock to prevent multiple concurrent requests from
+        loading the model simultaneously (which wastes RAM and can crash).
+        """
+        # Fast path: already loaded
         if self._embedder is not None:
             return
-        
-        try:
-            from sentence_transformers import SentenceTransformer
-        except ImportError:
-            raise RuntimeError(
-                "sentence-transformers not installed. "
-                "Install with: pip install sentence-transformers"
-            )
-        
-        # Look for embedding model directory
-        embed_patterns = [
-            "nomic-embed-text-v1.5",
-            "nomic-embed-text*",
-        ]
-        
-        embed_path = None
-        for pattern in embed_patterns:
-            matches = list(self.models_dir.glob(pattern))
-            if matches:
-                embed_path = matches[0]
-                break
-        
-        # nomic-embed uses custom code (nomic-bert-2048) - trust_remote_code required
-        # Must pass as direct arg; model_kwargs is not forwarded to AutoConfig.from_pretrained
-        st_kwargs = {"trust_remote_code": True}
-        if embed_path and embed_path.exists():
-            logger.info(f"Loading embedding model from {embed_path}")
-            self._embedder = SentenceTransformer(str(embed_path), **st_kwargs)
-        else:
-            # Fall back to downloading from HuggingFace (first run)
-            logger.warning(
-                f"Embedding model not found in {self.models_dir}. "
-                "Downloading from HuggingFace..."
-            )
-            self._embedder = SentenceTransformer("nomic-ai/nomic-embed-text-v1.5", **st_kwargs)
-        
-        logger.info("Embedding model loaded successfully")
+
+        with self._embed_load_lock:
+            # Double-check after acquiring lock (another thread may have loaded it)
+            if self._embedder is not None:
+                return
+
+            try:
+                from sentence_transformers import SentenceTransformer
+            except ImportError:
+                raise RuntimeError(
+                    "sentence-transformers not installed. "
+                    "Install with: pip install sentence-transformers"
+                )
+
+            # Look for embedding model directory
+            embed_patterns = [
+                "nomic-embed-text-v1.5",
+                "nomic-embed-text*",
+            ]
+
+            embed_path = None
+            for pattern in embed_patterns:
+                matches = list(self.models_dir.glob(pattern))
+                if matches:
+                    embed_path = matches[0]
+                    break
+
+            # nomic-embed uses custom code (nomic-bert-2048) - trust_remote_code required
+            # Must pass as direct arg; model_kwargs is not forwarded to AutoConfig.from_pretrained
+            st_kwargs = {"trust_remote_code": True}
+            if embed_path and embed_path.exists():
+                logger.info(f"Loading embedding model from {embed_path}")
+                self._embedder = SentenceTransformer(str(embed_path), **st_kwargs)
+            else:
+                # Fall back to downloading from HuggingFace (first run)
+                logger.warning(
+                    f"Embedding model not found in {self.models_dir}. "
+                    "Downloading from HuggingFace..."
+                )
+                self._embedder = SentenceTransformer("nomic-ai/nomic-embed-text-v1.5", **st_kwargs)
+
+            logger.info("Embedding model loaded successfully")
     
     @property
     def active_model_name(self) -> Optional[str]:
@@ -498,24 +662,47 @@ class LLMService:
         stop: Optional[List[str]] = None
     ) -> str:
         """Generate text completion.
-        
+
+        Atlas 3.0: Routes to either local llama.cpp or cloud API via LiteLLM
+        based on the current model source.
+
         Args:
             prompt: The prompt to complete (should already be formatted
-                   with the appropriate chat template).
+                   with the appropriate chat template for local models).
             temperature: Sampling temperature (lower = more deterministic)
             max_tokens: Maximum tokens to generate
             stop: List of stop sequences. Defaults to Llama 3 stop tokens.
-            
+
         Returns:
             Generated text string
         """
-        # Lazy load model
+        # Atlas 3.0: Route to API if in API mode
+        if self._model_source == "api" and self._api_model_name:
+            return await self._generate_via_api(
+                messages=[{"role": "user", "content": prompt}],
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+
+        # Lazy load local model
         if self._llm is None:
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, self._load_llm)
-        
+
         # Handle fallback mode (no llama-cpp-python or no model)
         if self._llm == "FALLBACK":
+            # Atlas 3.0: Try API fallback if available
+            api_models = self.list_available_api_models()
+            available_api = [m for m in api_models if m.get("has_key")]
+            if available_api:
+                logger.info("Local model unavailable, falling back to API model")
+                await self.load_api_model(available_api[0]["name"])
+                return await self._generate_via_api(
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+
             logger.warning("LLM generation in fallback mode - returning placeholder response")
             import sys
             if getattr(sys, "frozen", False) or hasattr(sys, "_MEIPASS"):
@@ -524,13 +711,14 @@ class LLMService:
                 )
             else:
                 msg = (
-                    "LLM model is not available. Install llama-cpp-python (pip install llama-cpp-python) and add a GGUF model to the models folder."
+                    "LLM model is not available. Install llama-cpp-python (pip install llama-cpp-python) and add a GGUF model to the models folder, "
+                    "or configure an API key (DEEPSEEK_API_KEY, etc.) for cloud model access."
                 )
             return (
                 f"I cannot generate a detailed response because the LLM is not available. {msg} "
                 "The retrieval system did find relevant documents."
             )
-        
+
         # Default stop tokens based on loaded model
         if stop is None:
             if self._model_type == "qwen":
@@ -539,10 +727,10 @@ class LLMService:
                 stop = ["<|end|>", "<|endoftext|>"]
             else:
                 stop = ["<|eot_id|>", "<|end_of_text|>"]
-        
+
         # Run generation in executor to not block event loop
         loop = asyncio.get_running_loop()
-        
+
         def _generate():
             with self._llm_lock:
                 output = self._llm(
@@ -553,7 +741,7 @@ class LLMService:
                     echo=False
                 )
                 return output["choices"][0]["text"].strip()
-        
+
         return await loop.run_in_executor(None, _generate)
 
     async def generate_constrained(
@@ -565,8 +753,8 @@ class LLMService:
     ) -> dict:
         """Generate JSON output strictly conforming to a JSON schema.
 
-        Uses llama-cpp-python's GBNF grammar support to force the LLM to
-        produce valid JSON matching the schema. No parsing retries needed.
+        Atlas 3.0: For local models, uses llama-cpp-python's GBNF grammar.
+        For API models, uses response_format=json_object and parses the output.
 
         Args:
             prompt: The prompt (should request JSON output).
@@ -579,7 +767,31 @@ class LLMService:
         """
         import json as _json
 
-        # Lazy load model
+        # Atlas 3.0: Route to API if in API mode
+        if self._model_source == "api" and self._api_model_name:
+            try:
+                raw = await self._generate_via_api(
+                    messages=[{"role": "user", "content": prompt + "\n\nRespond with ONLY valid JSON matching the required schema."}],
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    response_format={"type": "json_object"},
+                )
+                return _json.loads(raw)
+            except _json.JSONDecodeError:
+                # Try extracting JSON from the response
+                start = raw.find("{")
+                end = raw.rfind("}") + 1
+                if start >= 0 and end > start:
+                    try:
+                        return _json.loads(raw[start:end])
+                    except _json.JSONDecodeError:
+                        pass
+                return {}
+            except Exception as e:
+                logger.warning(f"API constrained generation failed: {e}")
+                return {}
+
+        # Lazy load local model
         if self._llm is None:
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, self._load_llm)
@@ -643,20 +855,32 @@ class LLMService:
         stop: Optional[List[str]] = None
     ) -> str:
         """Generate a response using the active model's chat template.
-        
-        Convenience method that formats the prompt with the proper
-        Llama 3 Instruct chat template before calling generate().
-        
+
+        Atlas 3.0: For API models, uses LiteLLM's native chat completion API
+        with proper system/user message formatting. For local models, formats
+        with the appropriate chat template before calling generate().
+
         Args:
             system_message: System instruction (role, persona, rules).
             user_message: User query / content.
             temperature: Sampling temperature.
             max_tokens: Maximum tokens to generate.
             stop: Optional custom stop sequences.
-            
+
         Returns:
             Generated text string
         """
+        # Atlas 3.0: Route to API if in API mode (uses native chat format)
+        if self._model_source == "api" and self._api_model_name:
+            return await self._generate_via_api(
+                messages=[
+                    {"role": "system", "content": system_message},
+                    {"role": "user", "content": user_message},
+                ],
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+
         if self._llm is None:
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, self._load_llm)
@@ -667,7 +891,7 @@ class LLMService:
             prompt = self._format_phi3_prompt(system_message, user_message)
         else:
             prompt = self._format_llama3_prompt(system_message, user_message)
-            
+
         return await self.generate(
             prompt=prompt,
             temperature=temperature,
@@ -732,38 +956,48 @@ class LLMService:
         return self._active_model_name
 
     def get_status(self) -> dict:
-        """Return LLM status for UI display."""
+        """Return LLM status for UI display.
+
+        Atlas 3.0: Now includes model_source and api_models_available fields.
+        """
         return {
             "active_model": self._active_model_name,
             "model_type": self._model_type,
             "device": self._device,
             "gpu_layers": self._gpu_layers,
-            "fallback": self._llm == "FALLBACK",
+            "fallback": self._llm == "FALLBACK" and self._model_source == "local",
+            "model_source": self._model_source,
+            "api_models_available": len(self.list_available_api_models()) > 0,
         }
-    
+
     def list_available_models(self) -> List[str]:
         """List all .gguf files in the models directory."""
         if not self.models_dir.exists():
             return []
         return sorted(p.name for p in self.models_dir.glob("*.gguf"))
-    
+
     async def load_model(self, model_name: str) -> str:
-        """Unload the current LLM and load a different GGUF model.
-        
-        This method is LOCKED to prevent concurrent model switching during active queries.
-        Subsequent load_model() calls will wait for the first to complete.
-        
+        """Load a model - either local GGUF or API model.
+
+        Atlas 3.0: Detects API model names (containing '/') and routes to
+        load_api_model(). Otherwise loads a local GGUF model.
+
         Args:
-            model_name: Filename of the .gguf model in MODELS_DIR.
-            
+            model_name: Filename of GGUF model OR LiteLLM model ID (e.g., "deepseek/deepseek-chat")
+
         Returns:
             Name of the newly loaded model.
-            
-        Raises:
-            FileNotFoundError: If the model file does not exist.
-            RuntimeError: If llama-cpp-python is not available.
-            TimeoutError: If another query/operation holds the lock too long.
         """
+        # Atlas 3.0: Detect API models by provider/model format
+        if "/" in model_name:
+            return await self.load_api_model(model_name)
+
+        # Switch back to local mode if currently on API
+        if self._model_source == "api":
+            self._model_source = "local"
+            self._api_model_name = None
+            logger.info("Switching from API model back to local model")
+
         # Acquire lock with timeout to prevent permanent blocking
         try:
             await asyncio.wait_for(self._model_lock.acquire(), timeout=120)

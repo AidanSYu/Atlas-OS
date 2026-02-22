@@ -1,14 +1,17 @@
 """
 Retrieval Service - Hybrid RAG retrieval logic.
 
-Implements hybrid search combining:
+Atlas 3.0: Implements hybrid search combining:
 1. Vector search (semantic similarity via embedded Qdrant)
-2. Entity-based matching (knowledge graph nodes)
-3. Exact text matching (dates, numbers, specific phrases)
-4. Graph expansion (1-hop neighborhood)
-5. Document filtering (only active/completed documents)
+2. BM25 sparse search (keyword matching via bm25s)
+3. Reciprocal Rank Fusion (RRF) to merge vector + BM25 results
+4. Entity-based matching (knowledge graph nodes)
+5. Exact text matching (dates, numbers, specific phrases)
+6. Graph expansion (1-hop neighborhood)
+7. FlashRank cross-encoder reranking
+8. Document filtering (only active/completed documents)
 
-Production Desktop Sidecar: SQLite + embedded Qdrant + bundled LLMs.
+Production Desktop Sidecar: SQLite + embedded Qdrant + BM25 + bundled LLMs.
 """
 from typing import List, Dict, Any, Optional, Set
 from sqlalchemy.orm import Session, joinedload
@@ -22,13 +25,14 @@ from app.core.config import settings
 from app.services.llm import LLMService
 from app.core.qdrant_store import get_qdrant_client
 from app.services.rerank import get_rerank_service
+from app.services.bm25_index import get_bm25_service, rrf_fuse
 from qdrant_client.models import Filter, FieldCondition, MatchValue
 
 logger = logging.getLogger(__name__)
 
 
 class RetrievalService:
-    """Handles hybrid retrieval from vector store and knowledge graph."""
+    """Handles hybrid retrieval from vector store, BM25, and knowledge graph."""
 
     def __init__(self):
         self.llm_service = LLMService.get_instance()
@@ -36,7 +40,9 @@ class RetrievalService:
         self.qdrant_client = get_qdrant_client()
         self.collection_name = settings.QDRANT_COLLECTION
         self.reranker = get_rerank_service()
-        logger.info("RetrievalService initialized (embedded Qdrant)")
+        # Atlas 3.0: BM25 sparse retrieval
+        self.bm25_service = get_bm25_service()
+        logger.info("RetrievalService initialized (embedded Qdrant + BM25)")
 
     async def _embed_text(self, text: str) -> List[float]:
         """Generate embedding using bundled LLM service."""
@@ -230,40 +236,77 @@ If no dates/entities found, return empty arrays."""
                     except Exception as e:
                         logger.debug(f"Error searching document {doc_id}: {e}")
 
-            # Step 4: Combine and deduplicate chunks
-            all_chunks: Dict[str, Dict] = {}
+            # Step 3.5 (Atlas 3.0): BM25 sparse keyword search
+            bm25_chunks = []
+            if self.bm25_service.is_available() and self.bm25_service.corpus_size > 0:
+                try:
+                    bm25_results = self.bm25_service.search(
+                        query=user_question,
+                        top_k=20,
+                        doc_ids=active_doc_ids,
+                    )
+                    bm25_chunks = bm25_results
+                    logger.info(f"BM25 returned {len(bm25_chunks)} results")
+                except Exception as e:
+                    logger.warning(f"BM25 search failed (non-fatal): {e}")
 
-            for result in vector_results[:10]:
+            # Step 4: Combine results using Reciprocal Rank Fusion (RRF)
+            # Atlas 3.0: RRF fuses vector, BM25, entity, and exact match results
+
+            # Convert vector results to standard format
+            vector_chunk_list = []
+            for result in vector_results[:15]:
                 payload = result.payload
                 chunk_id = str(result.id)
-                if chunk_id not in all_chunks:
-                    all_chunks[chunk_id] = {
-                        "text": payload.get("text", ""),
-                        "doc_id": payload.get("doc_id"),
-                        "metadata": {**payload.get("metadata", {}), "chunk_id": chunk_id},
-                        "relevance_score": float(result.score),
-                        "match_type": "vector",
-                    }
+                vector_chunk_list.append({
+                    "text": payload.get("text", ""),
+                    "doc_id": payload.get("doc_id"),
+                    "metadata": {**payload.get("metadata", {}), "chunk_id": chunk_id},
+                    "relevance_score": float(result.score),
+                    "match_type": "vector",
+                })
 
-            for chunk in entity_matched_chunks:
-                chunk_id = chunk.get("metadata", {}).get("chunk_id", "")
-                if chunk_id and chunk_id not in all_chunks:
-                    all_chunks[chunk_id] = chunk
-                elif chunk_id in all_chunks:
-                    all_chunks[chunk_id]["relevance_score"] = max(
-                        all_chunks[chunk_id]["relevance_score"], 0.95
-                    )
+            # Use RRF to fuse all result lists
+            if bm25_chunks:
+                candidate_chunks = rrf_fuse(
+                    vector_chunk_list,
+                    bm25_chunks,
+                    entity_matched_chunks,
+                    exact_matched_chunks,
+                    k=60,
+                )
+                logger.info(f"RRF fused {len(vector_chunk_list)} vector + {len(bm25_chunks)} BM25 + "
+                           f"{len(entity_matched_chunks)} entity + {len(exact_matched_chunks)} exact "
+                           f"-> {len(candidate_chunks)} candidates")
+            else:
+                # Fallback: manual merge when BM25 is not available
+                all_chunks: Dict[str, Dict] = {}
+                for chunk in vector_chunk_list:
+                    chunk_id = chunk.get("metadata", {}).get("chunk_id", "")
+                    if chunk_id and chunk_id not in all_chunks:
+                        all_chunks[chunk_id] = chunk
 
-            for chunk in exact_matched_chunks:
-                chunk_id = chunk.get("metadata", {}).get("chunk_id", "")
-                if chunk_id and chunk_id not in all_chunks:
-                    all_chunks[chunk_id] = chunk
-                elif chunk_id in all_chunks:
-                    all_chunks[chunk_id]["relevance_score"] = max(
-                        all_chunks[chunk_id]["relevance_score"], 0.98
-                    )
+                for chunk in entity_matched_chunks:
+                    chunk_id = chunk.get("metadata", {}).get("chunk_id", "")
+                    if chunk_id and chunk_id not in all_chunks:
+                        all_chunks[chunk_id] = chunk
+                    elif chunk_id in all_chunks:
+                        all_chunks[chunk_id]["relevance_score"] = max(
+                            all_chunks[chunk_id]["relevance_score"], 0.95
+                        )
 
-            candidate_chunks = sorted(all_chunks.values(), key=lambda x: x["relevance_score"], reverse=True)[:20]
+                for chunk in exact_matched_chunks:
+                    chunk_id = chunk.get("metadata", {}).get("chunk_id", "")
+                    if chunk_id and chunk_id not in all_chunks:
+                        all_chunks[chunk_id] = chunk
+                    elif chunk_id in all_chunks:
+                        all_chunks[chunk_id]["relevance_score"] = max(
+                            all_chunks[chunk_id]["relevance_score"], 0.98
+                        )
+
+                candidate_chunks = sorted(all_chunks.values(), key=lambda x: x["relevance_score"], reverse=True)
+
+            candidate_chunks = candidate_chunks[:20]
 
             # Step 4.5: Reranking (Phase B1) - Cross-encoder precision scoring
             if settings.ENABLE_RERANKING and len(candidate_chunks) > 0:

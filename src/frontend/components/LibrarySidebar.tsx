@@ -15,15 +15,17 @@ import {
   CheckCircle2,
   Clock,
   AlertCircle,
+  FileDown,
 } from 'lucide-react';
 import { api, FileInfo } from '@/lib/api';
-import { toastError } from '@/stores/toastStore';
+import { toastError, toast, toastSuccess } from '@/stores/toastStore';
 
 interface LibrarySidebarProps {
   onFileSelect: (docId: string, filename: string) => void;
   selectedDocId: string | null;
   projectId: string;
   onIngestionComplete?: () => void;
+  onFileDeleted?: (docId: string) => void;
 }
 
 export default function LibrarySidebar({
@@ -31,6 +33,7 @@ export default function LibrarySidebar({
   selectedDocId,
   projectId,
   onIngestionComplete,
+  onFileDeleted,
 }: LibrarySidebarProps) {
   const [files, setFiles] = useState<FileInfo[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -98,9 +101,30 @@ export default function LibrarySidebar({
     e.stopPropagation();
     try {
       await api.deleteFile(fileId);
+      onFileDeleted?.(fileId);
       setFiles((prev) => prev.filter((f) => f.doc_id !== fileId));
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const handleImport = async (file: File) => {
+    try {
+      toast('Importing bibliography...', 'info');
+      const result = await api.importBibtex(file, projectId);
+
+      if (result.total_imported > 0) {
+        toastSuccess(`Imported ${result.total_imported} of ${result.total_entries} entries`);
+        await loadFiles();
+      } else {
+        toastError('No entries were imported');
+      }
+
+      if (result.skipped.length > 0) {
+        console.warn('Skipped entries:', result.skipped);
+      }
+    } catch (error: any) {
+      toastError(`Import failed: ${error.message}`);
     }
   };
 
@@ -191,13 +215,27 @@ export default function LibrarySidebar({
           </div>
         ) : files.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
-            <div className="rounded-full bg-primary/10 p-3 mb-3">
-              <Upload className="h-6 w-6 text-primary" />
+            <div className="rounded-full bg-gradient-to-br from-primary/20 to-accent/20 p-4 mb-4">
+              <Upload className="h-8 w-8 text-primary" />
             </div>
-            <p className="text-sm font-medium text-foreground">No documents yet</p>
-            <p className="mt-1 text-[11px] text-muted-foreground">
-              Upload PDFs to start building your knowledge base
+            <p className="text-sm font-medium text-foreground mb-2">No documents yet</p>
+            <p className="text-xs text-muted-foreground mb-6 max-w-[200px]">
+              Upload PDFs to build your research library
             </p>
+            <div className="w-full space-y-2 text-left">
+              <div className="flex items-start gap-2 text-xs text-muted-foreground">
+                <span className="text-accent mt-0.5">•</span>
+                <span>Drag & drop files</span>
+              </div>
+              <div className="flex items-start gap-2 text-xs text-muted-foreground">
+                <span className="text-accent mt-0.5">•</span>
+                <span>Import from BibTeX</span>
+              </div>
+              <div className="flex items-start gap-2 text-xs text-muted-foreground">
+                <span className="text-accent mt-0.5">•</span>
+                <span>Auto-extract entities</span>
+              </div>
+            </div>
           </div>
         ) : (
           <>
@@ -253,8 +291,17 @@ export default function LibrarySidebar({
                   {filteredFiles.map((file) => (
                     <div
                       key={file.doc_id}
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData('application/atlas-document', JSON.stringify({
+                          id: file.doc_id,
+                          filename: file.filename,
+                          status: file.status,
+                          pageCount: file.page_count,
+                        }));
+                      }}
                       onClick={() => onFileSelect(file.doc_id, file.filename)}
-                      className={`group flex cursor-pointer items-center gap-2 rounded-lg px-2 py-2 transition-all ${
+                      className={`group flex cursor-move items-center gap-2 rounded-lg px-2 py-2 transition-all ${
                         selectedDocId === file.doc_id
                           ? 'bg-primary/15 text-foreground border border-primary/30'
                           : 'text-muted-foreground hover:bg-surface hover:text-foreground border border-transparent'
@@ -305,6 +352,31 @@ export default function LibrarySidebar({
           )}
           <span className="text-xs font-medium text-muted-foreground">
             {uploading ? 'Uploading...' : 'Upload Documents'}
+          </span>
+        </label>
+
+        {/* Import BibTeX/RIS */}
+        <label
+          className={`flex cursor-pointer items-center gap-2.5 rounded-lg border border-dashed border-border bg-surface px-3 py-2.5 transition-all ${
+            uploading
+              ? 'cursor-not-allowed opacity-50'
+              : 'hover:border-accent/40 hover:bg-accent/5'
+          }`}
+        >
+          <input
+            type="file"
+            className="hidden"
+            accept=".bib,.ris"
+            disabled={uploading}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) handleImport(file);
+              e.target.value = '';
+            }}
+          />
+          <FileDown className="h-4 w-4 text-accent" />
+          <span className="text-xs font-medium text-muted-foreground">
+            Import BibTeX/RIS
           </span>
         </label>
       </div>

@@ -40,8 +40,12 @@ async function fetchWithTimeout(
 ): Promise<Response> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
+  // Compose timeout signal with any externally-provided signal
+  const signals: AbortSignal[] = [controller.signal];
+  if (options.signal) signals.push(options.signal);
+  const composedSignal = signals.length > 1 ? AbortSignal.any(signals) : controller.signal;
   try {
-    return await fetch(url, { ...options, signal: controller.signal });
+    return await fetch(url, { ...options, signal: composedSignal });
   } finally {
     clearTimeout(timeoutId);
   }
@@ -69,6 +73,7 @@ export interface FileInfo {
   processed_chunks?: number;
   progress?: number;
   project_id?: string;
+  page_count?: number;
 }
 
 export interface ChatMessage {
@@ -131,6 +136,22 @@ export interface ModelStatusResponse {
   device: string;
   gpu_layers: number;
   fallback: boolean;
+  model_source: 'local' | 'api';          // Atlas 3.0
+  api_models_available: boolean;           // Atlas 3.0
+}
+
+// Atlas 3.0: Model Registry types
+export interface RegistryModel {
+  name: string;
+  source: 'local' | 'api';
+  provider: string;
+  has_key?: boolean;
+}
+
+export interface ModelRegistryResponse {
+  local: RegistryModel[];
+  api: RegistryModel[];
+  active: ModelStatusResponse;
 }
 
 export interface GroundingEvent {
@@ -150,19 +171,29 @@ export interface SwarmEvidence {
 }
 
 export interface SwarmResponse {
-  brain_used: 'navigator' | 'cortex';
+  brain_used: 'navigator' | 'cortex' | string;
   hypothesis: string;
   evidence: SwarmEvidence[];
   reasoning_trace: string[];
   status: string;
   confidence_score?: number;
   iterations?: number;
+  final_answer?: string;
   contradictions?: Array<{
     claim_a: string;
     claim_b: string;
     severity: 'HIGH' | 'LOW';
     resolution?: string;
   }>;
+}
+
+// Phase 4: Workspace Drafts
+export interface WorkspaceDraft {
+  id: string;
+  filename: string;
+  size?: number;
+  content?: Record<string, any>;
+  updated_at: number;
 }
 
 // Phase 4: Context Engine types
@@ -255,11 +286,56 @@ export interface CitationFormatResult {
   style: string;
 }
 
+// Phase 6: API Key Configuration
+export interface ConfigKeys {
+  has_openai: boolean;
+  has_anthropic: boolean;
+  has_deepseek: boolean;
+  has_minimax: boolean;
+}
+
+export interface ConfigKeysUpdate {
+  OPENAI_API_KEY?: string;
+  ANTHROPIC_API_KEY?: string;
+  DEEPSEEK_API_KEY?: string;
+  MINIMAX_API_KEY?: string;
+}
+
+export interface ConfigKeysVerifyResponse {
+  openai: boolean;
+  anthropic: boolean;
+  deepseek: boolean;
+  minimax: boolean;
+}
+
 // ============================================================
 // API CLIENT
 // ============================================================
 
 export const api = {
+  // ---- Config / API Keys ----
+
+  async getApiKeysStatus(): Promise<ConfigKeys> {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/config/keys`);
+    return handleResponse(response);
+  },
+
+  async updateApiKeys(keys: ConfigKeysUpdate): Promise<{ status: string }> {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/config/keys`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(keys),
+    });
+    return handleResponse(response);
+  },
+
+  async verifyApiKeys(): Promise<ConfigKeysVerifyResponse> {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/config/keys/verify`, {
+      method: 'POST',
+    });
+    return handleResponse(response);
+  },
+
   // ---- Projects ----
 
   async createProject(name: string, description?: string): Promise<ProjectInfo> {
@@ -319,20 +395,21 @@ export const api = {
 
   // ---- Chat (Librarian RAG) ----
 
-  async chat(query: string, projectId?: string): Promise<ChatResponse> {
+  async chat(query: string, projectId?: string, signal?: AbortSignal): Promise<ChatResponse> {
     const response = await fetchWithTimeout(
       `${API_BASE_URL}/chat`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query, project_id: projectId }),
+        signal,
       },
       CHAT_TIMEOUT
     );
     return handleResponse(response);
   },
 
-  // ---- Swarm (Two-Brain Agentic RAG) ----
+  // ---- Swarm (Two-Brain Agentic RAG) / MoE (Atlas 3.0) ----
 
   async runSwarm(query: string, projectId: string): Promise<SwarmResponse> {
     const response = await fetchWithTimeout(
@@ -345,6 +422,131 @@ export const api = {
       SWARM_TIMEOUT
     );
     return handleResponse(response);
+  },
+
+  // ---- Atlas 3.0: MoE (Mixture of Experts) ----
+
+  async runMoE(query: string, projectId: string): Promise<SwarmResponse> {
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/api/moe/run`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, project_id: projectId }),
+      },
+      SWARM_TIMEOUT
+    );
+    return handleResponse(response);
+  },
+
+  async streamMoE(
+    query: string,
+    projectId: string,
+    onEvent: (type: string, data: any) => void,
+    sessionId?: string,
+    signal?: AbortSignal
+  ): Promise<void> {
+    const response = await fetch(`${API_BASE_URL}/api/moe/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query,
+        project_id: projectId,
+        session_id: sessionId,
+      }),
+      signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`MoE streaming failed: ${response.statusText}`);
+    }
+
+    const reader = response.body?.getReader();
+    const decoder = new TextDecoder();
+    if (!reader) return;
+
+    let buffer = '';
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split('\n\n');
+        buffer = events.pop() || '';
+
+        for (const eventBlock of events) {
+          if (!eventBlock.trim()) continue;
+          let type = '';
+          let data = null;
+          for (const line of eventBlock.split('\n')) {
+            if (line.startsWith('event: ')) type = line.substring(7).trim();
+            else if (line.startsWith('data: ')) {
+              try { data = JSON.parse(line.substring(6).trim()); }
+              catch (e) { console.error('JSON parse error:', e); }
+            }
+          }
+          if (type && data) onEvent(type, data);
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  },
+
+  async streamMoEHypotheses(
+    query: string,
+    projectId: string,
+    onEvent: (type: string, data: any) => void,
+    sessionId?: string,
+    signal?: AbortSignal
+  ): Promise<void> {
+    const response = await fetch(`${API_BASE_URL}/api/moe/hypotheses`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query,
+        project_id: projectId,
+        session_id: sessionId,
+      }),
+      signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`MoE hypotheses streaming failed: ${response.statusText}`);
+    }
+
+    const reader = response.body?.getReader();
+    const decoder = new TextDecoder();
+    if (!reader) return;
+
+    let buffer = '';
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split('\n\n');
+        buffer = events.pop() || '';
+
+        for (const eventBlock of events) {
+          if (!eventBlock.trim()) continue;
+          let type = '';
+          let data = null;
+          for (const line of eventBlock.split('\n')) {
+            if (line.startsWith('event: ')) type = line.substring(7).trim();
+            else if (line.startsWith('data: ')) {
+              try { data = JSON.parse(line.substring(6).trim()); }
+              catch (e) { console.error('JSON parse error:', e); }
+            }
+          }
+          if (type && data) onEvent(type, data);
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
   },
 
   // ---- Entities & Graph ----
@@ -411,6 +613,46 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model_name: modelName }),
     });
+    return handleResponse(response);
+  },
+
+  // Atlas 3.0: Model Registry (local + cloud API models)
+  async getModelRegistry(): Promise<ModelRegistryResponse> {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/models/registry`);
+    return handleResponse(response);
+  },
+
+  // ---- Workspace (Phase 4) ----
+
+  async listWorkspaceDrafts(projectId: string): Promise<WorkspaceDraft[]> {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/api/workspace/${encodeURIComponent(projectId)}/drafts`);
+    return handleResponse(response);
+  },
+
+  async getWorkspaceDraft(projectId: string, draftId: string): Promise<WorkspaceDraft> {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/api/workspace/${encodeURIComponent(projectId)}/drafts/${encodeURIComponent(draftId)}`);
+    return handleResponse(response);
+  },
+
+  async saveWorkspaceDraft(projectId: string, draftId: string, content: Record<string, any>): Promise<any> {
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/api/workspace/${encodeURIComponent(projectId)}/drafts/${encodeURIComponent(draftId)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content }),
+      }
+    );
+    return handleResponse(response);
+  },
+
+  async deleteWorkspaceDraft(projectId: string, draftId: string): Promise<any> {
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/api/workspace/${encodeURIComponent(projectId)}/drafts/${encodeURIComponent(draftId)}`,
+      {
+        method: 'DELETE',
+      }
+    );
     return handleResponse(response);
   },
 

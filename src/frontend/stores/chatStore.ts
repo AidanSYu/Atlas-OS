@@ -60,22 +60,34 @@ interface ChatState {
   cortexInput: string;
   cortexSessionId: string;
 
+  // MoE (blue) chat state
+  moeMessages: ChatMessage[];
+  moeInput: string;
+  moeSessionId: string;
+
   // Current active project (for clearing on project change)
   activeProjectId: string | null;
 
   // Pending question (pre-filled from other views, e.g. "Ask about this page")
   pendingQuestion: string | null;
 
+  // Phase 4: Pending hypotheses for MoE user-in-the-loop interaction
+  pendingHypotheses: any[] | null;
+
   // Actions
   addLibrarianMessage: (message: Omit<ChatMessage, 'id' | 'timestamp'>) => void;
   addCortexMessage: (message: Omit<ChatMessage, 'id' | 'timestamp'>) => void;
+  addMoeMessage: (message: Omit<ChatMessage, 'id' | 'timestamp'>) => void;
   setLibrarianInput: (input: string) => void;
   setCortexInput: (input: string) => void;
+  setMoeInput: (input: string) => void;
   clearLibrarianChat: () => void;
   clearCortexChat: () => void;
+  clearMoeChat: () => void;
   clearAllChats: () => void;
   setActiveProject: (projectId: string | null) => void;
   setPendingQuestion: (question: string | null) => void;
+  setPendingHypotheses: (hypotheses: any[] | null) => void;
 }
 
 const generateId = () => Math.random().toString(36).substring(2, 15);
@@ -95,6 +107,13 @@ const CORTEX_WELCOME: ChatMessage = {
   timestamp: Date.now(),
 };
 
+const MOE_WELCOME: ChatMessage = {
+  id: 'moe-welcome',
+  role: 'assistant',
+  content: "I'm the **Mixture of Experts (MoE) Supervisor**. I manage a team of specialized agents (Hypothesis, Retrieval, Writer, Critic). Ask a complex research question, and I'll orchestrate the team to synthesize a highly grounded answer.",
+  timestamp: Date.now(),
+};
+
 export const useChatStore = create<ChatState>()(
   persist(
     (set, get) => ({
@@ -105,8 +124,12 @@ export const useChatStore = create<ChatState>()(
       cortexMessages: [CORTEX_WELCOME],
       cortexInput: '',
       cortexSessionId: crypto.randomUUID(),
+      moeMessages: [MOE_WELCOME],
+      moeInput: '',
+      moeSessionId: crypto.randomUUID(),
       activeProjectId: null,
       pendingQuestion: null,
+      pendingHypotheses: null,
 
       addLibrarianMessage: (message) =>
         set((state) => ({
@@ -124,8 +147,17 @@ export const useChatStore = create<ChatState>()(
           ],
         })),
 
+      addMoeMessage: (message) =>
+        set((state) => ({
+          moeMessages: [
+            ...state.moeMessages,
+            { ...message, id: generateId(), timestamp: Date.now() },
+          ],
+        })),
+
       setLibrarianInput: (input) => set({ librarianInput: input }),
       setCortexInput: (input) => set({ cortexInput: input }),
+      setMoeInput: (input) => set({ moeInput: input }),
 
       clearLibrarianChat: () =>
         set({ librarianMessages: [LIBRARIAN_WELCOME], librarianInput: '' }),
@@ -133,12 +165,17 @@ export const useChatStore = create<ChatState>()(
       clearCortexChat: () =>
         set({ cortexMessages: [CORTEX_WELCOME], cortexInput: '' }),
 
+      clearMoeChat: () =>
+        set({ moeMessages: [MOE_WELCOME], moeInput: '' }),
+
       clearAllChats: () =>
         set({
           librarianMessages: [LIBRARIAN_WELCOME],
           librarianInput: '',
           cortexMessages: [CORTEX_WELCOME],
           cortexInput: '',
+          moeMessages: [MOE_WELCOME],
+          moeInput: '',
         }),
 
       setActiveProject: (projectId) => {
@@ -151,15 +188,21 @@ export const useChatStore = create<ChatState>()(
             librarianInput: '',
             cortexMessages: [CORTEX_WELCOME],
             cortexInput: '',
+            moeMessages: [MOE_WELCOME],
+            moeInput: '',
             pendingQuestion: null,
           });
         }
       },
 
       setPendingQuestion: (question) => set({ pendingQuestion: question }),
+
+      setPendingHypotheses: (hypotheses) =>
+        set({ pendingHypotheses: hypotheses }),
     }),
     {
       name: 'atlas-chat-storage',
+      version: 2,
       storage: createJSONStorage(() => localStorage),
       // Only persist messages and inputs, not the project ID (we check that on load)
       partialize: (state) => ({
@@ -169,6 +212,9 @@ export const useChatStore = create<ChatState>()(
         cortexMessages: state.cortexMessages,
         cortexInput: state.cortexInput,
         cortexSessionId: state.cortexSessionId,
+        moeMessages: state.moeMessages,
+        moeInput: state.moeInput,
+        moeSessionId: state.moeSessionId,
         activeProjectId: state.activeProjectId,
       }),
     }

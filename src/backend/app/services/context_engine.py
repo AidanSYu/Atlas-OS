@@ -20,6 +20,26 @@ from qdrant_client.models import Filter, FieldCondition, MatchValue
 
 logger = logging.getLogger(__name__)
 
+# Patterns that indicate Docling/internal Python repr rather than readable prose
+_REPR_PATTERNS = (
+    "RefItem(",
+    "ContentLayer.",
+    "parent=RefItem",
+    "self_ref=",
+    "cref=",
+)
+
+
+def _sanitize_passage_text(text: str) -> str:
+    """Replace Docling/Python repr-like chunk text with a short fallback for UI."""
+    if not text or not text.strip():
+        return ""
+    t = text.strip()
+    for pattern in _REPR_PATTERNS:
+        if pattern in t:
+            return "Excerpt from document."
+    return t[:500]
+
 
 class ContextEngineService:
     """Proactive context-aware retrieval.
@@ -72,6 +92,22 @@ class ContextEngineService:
         finally:
             session.close()
 
+    def _document_exists(self, doc_id: str) -> bool:
+        """Return True if the document still exists in the database."""
+        session = get_session()
+        try:
+            return session.query(Document).filter(Document.id == doc_id).first() is not None
+        finally:
+            session.close()
+
+    def _collection_exists(self) -> bool:
+        """Check whether the Qdrant collection has been created yet."""
+        try:
+            names = [c.name for c in self.qdrant_client.get_collections().collections]
+            return self.collection_name in names
+        except Exception:
+            return False
+
     async def get_related_passages(
         self,
         doc_id: str,
@@ -84,33 +120,47 @@ class ContextEngineService:
         Embeds the input text and searches Qdrant, excluding chunks
         from the specified document.
         """
+        if not doc_id or not self._document_exists(doc_id):
+            return []
+
+        # Guard: collection may not exist if no documents have been fully ingested yet
+        if not self._collection_exists():
+            return []
+
         embedding = await self.llm_service.embed(text)
 
         # Build filter to exclude the source document
         must_not = [FieldCondition(key="doc_id", match=MatchValue(value=doc_id))]
         search_filter = Filter(must_not=must_not)
 
-        results = self.qdrant_client.query_points(
-            collection_name=self.collection_name,
-            query=embedding,
-            query_filter=search_filter,
-            limit=limit * 2,  # Fetch extra for reranking
-        ).points
+        try:
+            results = self.qdrant_client.query_points(
+                collection_name=self.collection_name,
+                query=embedding,
+                query_filter=search_filter,
+                limit=limit * 2,  # Fetch extra for reranking
+            ).points
+        except Exception as e:
+            logger.warning(f"Qdrant query failed (collection may be empty): {e}")
+            return []
 
         passages = []
         for r in results:
             payload = r.payload or {}
             meta = payload.get("metadata", {})
+            r_doc_id = payload.get("doc_id", "")
+            if r_doc_id == doc_id:
+                continue
+            raw_text = payload.get("text", "")[:500]
             passages.append({
-                "text": payload.get("text", "")[:500],
+                "text": _sanitize_passage_text(raw_text),
                 "source": meta.get("filename", "Unknown"),
                 "page": meta.get("page", 1),
-                "doc_id": payload.get("doc_id", ""),
+                "doc_id": r_doc_id,
                 "score": r.score,
                 "chunk_id": payload.get("chunk_id", ""),
             })
 
-        # Rerank if available
         if self.reranker and passages:
             try:
                 passages = await self.reranker.rerank(
@@ -124,7 +174,24 @@ class ContextEngineService:
         else:
             passages = passages[:limit]
 
-        return passages
+        filtered_passages = []
+        for p in passages:
+            score = p.get("score", 0.0)
+            is_reranked = "rerank_score" in p
+            
+            if is_reranked:
+                if score < 0.05:  # FlashRank can be very strict
+                    continue
+            else:
+                if score < 0.4:  # Qdrant cosine similarity threshold
+                    continue
+                # Normalize Qdrant 0.4-0.9 range to roughly 0.0-1.0
+                score = max(0.0, min(1.0, (score - 0.4) * 2.0))
+                p["score"] = score
+                
+            filtered_passages.append(p)
+
+        return filtered_passages
 
     async def get_context_suggestions(
         self,
@@ -144,22 +211,20 @@ class ContextEngineService:
         }
 
         if selected_text and len(selected_text.strip()) > 10:
-            # Find similar passages in OTHER documents
-            results["related_passages"] = await self.get_related_passages(
-                doc_id=current_doc_id or "",
-                text=selected_text,
-                project_id=project_id,
-                limit=5,
-            )
-
-            # Find connected entities from the graph
+            if current_doc_id and self._document_exists(current_doc_id):
+                results["related_passages"] = await self.get_related_passages(
+                    doc_id=current_doc_id,
+                    text=selected_text,
+                    project_id=project_id,
+                    limit=5,
+                )
             results["connected_concepts"] = await self._find_connected_entities(
                 selected_text, project_id
             )
 
         elif current_doc_id and current_page:
-            # No text selected, but we know what page they're on —
-            # find the chunks on that page and use them for context
+            if not self._document_exists(current_doc_id):
+                return results
             page_text = await self._get_page_text(current_doc_id, current_page)
             if page_text:
                 results["related_passages"] = await self.get_related_passages(

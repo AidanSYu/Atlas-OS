@@ -29,11 +29,18 @@ module.exports = {
         warning: 'hsl(var(--warning))',
         destructive: 'hsl(var(--destructive))',
         info: 'hsl(var(--info))',
+
+        // ContAInnum Brand Colors
+        void: '#070A0E',
+        safety: '#FF4D2E',
+        'text-primary': '#F2F5F9',
+        'text-secondary': '#9FB0C7',
       },
       fontFamily: {
-        sans: ['var(--font-inter)', 'sans-serif'],
-        serif: ['var(--font-serif)', 'serif'],
+        sans: ['var(--font-sans)', 'sans-serif'],
+        display: ['var(--font-display)', 'sans-serif'],
         mono: ['var(--font-mono)', 'monospace'],
+        serif: ['var(--font-serif)', 'serif'],
       },
       animation: {
         'pulse-glow': 'pulse-glow 1.5s ease-in-out infinite',
