@@ -1,4 +1,4 @@
-# Atlas Development Setup
+    # Atlas Development Setup
 
 ## Quick Start
 
