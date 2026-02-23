@@ -49,36 +49,32 @@ Atlas is a Tauri desktop app wrapping a Next.js frontend and a Python FastAPI ba
 
 ```mermaid
 graph TB
-    subgraph "Tauri Shell (Rust)"
-        direction TB
-        TW["Window Manager<br/>src/tauri/"]
-        SP["Sidecar Process<br/>Manager"]
+    subgraph TAURI["Tauri Shell - Rust"]
+        TW["Window Manager"]
+        SP["Sidecar Process Manager"]
     end
 
-    subgraph "Frontend (Next.js 14 + React + TypeScript)"
-        direction TB
-        CI["ChatInterface.tsx<br/>Primary chat UI"]
-        DAC["DualAgentChat.tsx<br/>Two-brain swarm UI"]
-        GC["GraphCanvas.tsx<br/>Knowledge graph viz"]
-        FS["FileSidebar.tsx<br/>Document management"]
-        API["lib/api.ts<br/>API client"]
+    subgraph FRONTEND["Frontend - Next.js 14 + React + TypeScript"]
+        CI["ChatInterface.tsx"]
+        DAC["DualAgentChat.tsx"]
+        GC["GraphCanvas.tsx"]
+        FS["FileSidebar.tsx"]
+        API["lib/api.ts"]
     end
 
-    subgraph "Backend (FastAPI + Python 3.12)"
-        direction TB
-        RT["routes.py<br/>REST API"]
-        SW["swarm.py<br/>Agent orchestrator (2,787 lines)"]
-        RET["retrieval.py<br/>Hybrid RAG engine"]
-        ING["ingest.py<br/>Document pipeline"]
-        LLM["llm.py<br/>Hybrid LLM service"]
-        GR["graph.py<br/>Graph queries"]
+    subgraph BACKEND["Backend - FastAPI + Python 3.12"]
+        RT["routes.py"]
+        SW["swarm.py - Agent Orchestrator"]
+        RET["retrieval.py - Hybrid RAG"]
+        ING["ingest.py - Document Pipeline"]
+        LLM["llm.py - Hybrid LLM Service"]
+        GR["graph.py - Graph Queries"]
     end
 
-    subgraph "Data Layer"
-        direction LR
-        QD["Qdrant (Embedded)<br/>Vector store"]
-        SQ["SQLite<br/>Relational store"]
-        RW["Rustworkx<br/>Graph engine"]
+    subgraph DATA["Data Layer"]
+        QD["Qdrant - Vector Store"]
+        SQ["SQLite - Relational Store"]
+        RW["Rustworkx - Graph Engine"]
     end
 
     TW --> CI
@@ -87,7 +83,7 @@ graph TB
     DAC --> API
     GC --> API
     FS --> API
-    API -->|"HTTP :8000"| RT
+    API -->|HTTP :8000| RT
     RT --> SW
     RT --> RET
     RT --> ING
@@ -106,86 +102,75 @@ graph TB
 
 | Layer | File | Purpose | Size |
 |---|---|---|---|
-| Backend Core | [swarm.py](file:///c:/Users/aidan/OneDrive%20-%20Duke%20University/Code/ContAInnum_Atlas2.0_backup_20260124_181415/src/backend/app/services/swarm.py) | Full agent orchestration: Navigator, Navigator 2.0, Cortex, routing | 2,787 lines |
-| Backend Core | [llm.py](file:///c:/Users/aidan/OneDrive%20-%20Duke%20University/Code/ContAInnum_Atlas2.0_backup_20260124_181415/src/backend/app/services/llm.py) | Hybrid LLM: local GGUF + cloud API via LiteLLM, CUDA DLL management | 1,116 lines |
-| Backend Core | [retrieval.py](file:///c:/Users/aidan/OneDrive%20-%20Duke%20University/Code/ContAInnum_Atlas2.0_backup_20260124_181415/src/backend/app/services/retrieval.py) | Hybrid RAG: vector + BM25 + graph, Reciprocal Rank Fusion | 494 lines |
-| Backend Core | [ingest.py](file:///c:/Users/aidan/OneDrive%20-%20Duke%20University/Code/ContAInnum_Atlas2.0_backup_20260124_181415/src/backend/app/services/ingest.py) | Document pipeline: extraction → chunking → GLiNER NER → embedding | 1,190 lines |
-| Agents | [meta_router.py](file:///c:/Users/aidan/OneDrive%20-%20Duke%20University/Code/ContAInnum_Atlas2.0_backup_20260124_181415/src/backend/app/services/agents/meta_router.py) | Intent classification (SIMPLE/DEEP/BROAD/MULTI_STEP) + model swapping | 101 lines |
-| Agents | [librarian.py](file:///c:/Users/aidan/OneDrive%20-%20Duke%20University/Code/ContAInnum_Atlas2.0_backup_20260124_181415/src/backend/app/services/agents/librarian.py) | Fast 2-node graph: Retrieve → Answer. Handles ~80% of queries in <5s | 216 lines |
-| Agents | [supervisor.py](file:///c:/Users/aidan/OneDrive%20-%20Duke%20University/Code/ContAInnum_Atlas2.0_backup_20260124_181415/src/backend/app/services/agents/supervisor.py) | MoE Supervisor: decomposes queries, delegates to experts, audits drafts | 372 lines |
-| Agents | [grounding.py](file:///c:/Users/aidan/OneDrive%20-%20Duke%20University/Code/ContAInnum_Atlas2.0_backup_20260124_181415/src/backend/app/services/agents/grounding.py) | Anti-hallucination: extracts claims → verifies each against source text | 161 lines |
-| Experts | [hypothesis.py](file:///c:/Users/aidan/OneDrive%20-%20Duke%20University/Code/ContAInnum_Atlas2.0_backup_20260124_181415/src/backend/app/services/agents/experts/hypothesis.py) | Generates ranked hypotheses from evidence | — |
-| Experts | [retrieval_expert.py](file:///c:/Users/aidan/OneDrive%20-%20Duke%20University/Code/ContAInnum_Atlas2.0_backup_20260124_181415/src/backend/app/services/agents/experts/retrieval_expert.py) | Targeted evidence gathering per sub-task | — |
-| Experts | [writer.py](file:///c:/Users/aidan/OneDrive%20-%20Duke%20University/Code/ContAInnum_Atlas2.0_backup_20260124_181415/src/backend/app/services/agents/experts/writer.py) | Drafts cited research prose from evidence | — |
-| Experts | [critic.py](file:///c:/Users/aidan/OneDrive%20-%20Duke%20University/Code/ContAInnum_Atlas2.0_backup_20260124_181415/src/backend/app/services/agents/experts/critic.py) | Reviews and critiques drafts for logical gaps | — |
-| Config | [config.py](file:///c:/Users/aidan/OneDrive%20-%20Duke%20University/Code/ContAInnum_Atlas2.0_backup_20260124_181415/src/backend/app/core/config.py) | 50+ tunable parameters (reflection iterations, chunk sizes, MoE rounds, etc.) | 129 lines |
-| Database | [database.py](file:///c:/Users/aidan/OneDrive%20-%20Duke%20University/Code/ContAInnum_Atlas2.0_backup_20260124_181415/src/backend/app/core/database.py) | SQLAlchemy ORM: `Project`, `Document`, `DocumentChunk`, `Node`, `Edge` | 266 lines |
+| Backend Core | `src/backend/app/services/swarm.py` | Full agent orchestration: Navigator, Navigator 2.0, Cortex, routing | 2,787 lines |
+| Backend Core | `src/backend/app/services/llm.py` | Hybrid LLM: local GGUF + cloud API via LiteLLM, CUDA DLL management | 1,116 lines |
+| Backend Core | `src/backend/app/services/retrieval.py` | Hybrid RAG: vector + BM25 + graph, Reciprocal Rank Fusion | 494 lines |
+| Backend Core | `src/backend/app/services/ingest.py` | Document pipeline: extraction → chunking → GLiNER NER → embedding | 1,190 lines |
+| Agents | `src/backend/app/services/agents/meta_router.py` | Intent classification (SIMPLE/DEEP/BROAD/MULTI_STEP) + model swapping | 101 lines |
+| Agents | `src/backend/app/services/agents/librarian.py` | Fast 2-node graph: Retrieve → Answer. Handles ~80% of queries in <5s | 216 lines |
+| Agents | `src/backend/app/services/agents/supervisor.py` | MoE Supervisor: decomposes queries, delegates to experts, audits drafts | 372 lines |
+| Agents | `src/backend/app/services/agents/grounding.py` | Anti-hallucination: extracts claims → verifies each against source text | 161 lines |
+| Experts | `src/backend/app/services/agents/experts/hypothesis.py` | Generates ranked hypotheses from evidence | — |
+| Experts | `src/backend/app/services/agents/experts/retrieval_expert.py` | Targeted evidence gathering per sub-task | — |
+| Experts | `src/backend/app/services/agents/experts/writer.py` | Drafts cited research prose from evidence | — |
+| Experts | `src/backend/app/services/agents/experts/critic.py` | Reviews and critiques drafts for logical gaps | — |
+| Config | `src/backend/app/core/config.py` | 50+ tunable parameters (reflection iterations, chunk sizes, MoE rounds, etc.) | 129 lines |
+| Database | `src/backend/app/core/database.py` | SQLAlchemy ORM: Project, Document, DocumentChunk, Node, Edge | 266 lines |
 
 ---
 
 ## 3. The Knowledge Pipeline
 
-When a user uploads a document, Atlas runs a multi-stage ingestion pipeline defined in [ingest.py](file:///c:/Users/aidan/OneDrive%20-%20Duke%20University/Code/ContAInnum_Atlas2.0_backup_20260124_181415/src/backend/app/services/ingest.py):
+When a user uploads a document, Atlas runs a multi-stage ingestion pipeline defined in `ingest.py`:
 
 ```mermaid
 graph LR
-    A["📄 PDF / DOCX / TXT"] --> B["Text Extraction<br/>Docling VLM or pdfplumber"]
-    B --> C["Semantic Chunking<br/>~512 tokens per chunk"]
-    C --> D["GLiNER NER<br/>Entity extraction<br/>~50x faster than LLM"]
-    C --> E["Nomic Embed v1.5<br/>Vector embedding"]
-    D --> F["SQLite<br/>Nodes & Edges"]
-    D --> G["Rustworkx<br/>Graph construction"]
-    E --> H["Qdrant<br/>Vector indexing"]
-    C --> I["BM25 Index<br/>Keyword search"]
-    C --> J["RAPTOR<br/>Hierarchical summaries"]
-
-    style A fill:#4A90D9,color:#fff
-    style D fill:#E67E22,color:#fff
-    style H fill:#27AE60,color:#fff
-    style F fill:#8E44AD,color:#fff
-    style G fill:#C0392B,color:#fff
+    A["PDF / DOCX / TXT"] --> B["Text Extraction"]
+    B --> C["Semantic Chunking"]
+    C --> D["GLiNER NER"]
+    C --> E["Nomic Embed v1.5"]
+    D --> F["SQLite Nodes and Edges"]
+    D --> G["Rustworkx Graph"]
+    E --> H["Qdrant Vectors"]
+    C --> I["BM25 Index"]
+    C --> J["RAPTOR Summaries"]
 ```
 
 **Key implementation details:**
 
 - **Text Extraction:** Tries Docling VLM first for structure-preserving extraction (tables, charts), falls back to `pdfplumber`/`PyPDF` (`_extract_pdf_text` in `ingest.py`)
-- **Chunking:** Uses semantic chunking via [semantic_chunker.py](file:///c:/Users/aidan/OneDrive%20-%20Duke%20University/Code/ContAInnum_Atlas2.0_backup_20260124_181415/src/backend/app/services/semantic_chunker.py) (target: 512 tokens), falls back to fixed-size overlap (1000 chars, 200 overlap)
+- **Chunking:** Uses semantic chunking via `semantic_chunker.py` (target: 512 tokens), falls back to fixed-size overlap (1000 chars, 200 overlap)
 - **Entity Extraction:** GLiNER (`gliner_small-v2.1`, ~50 MB) extracts typed entities (PERSON, ORGANIZATION, CONCEPT, etc.) without requiring an LLM call, via `_extract_entities_gliner`
-- **RAPTOR:** [raptor.py](file:///c:/Users/aidan/OneDrive%20-%20Duke%20University/Code/ContAInnum_Atlas2.0_backup_20260124_181415/src/backend/app/services/raptor.py) generates hierarchical cluster summaries (L1 clusters) for each document, enabling multi-resolution retrieval
-- **BM25:** [bm25_index.py](file:///c:/Users/aidan/OneDrive%20-%20Duke%20University/Code/ContAInnum_Atlas2.0_backup_20260124_181415/src/backend/app/services/bm25_index.py) maintains a sparse keyword index fused with vector results via Reciprocal Rank Fusion (`rrf_fuse`)
+- **RAPTOR:** `raptor.py` generates hierarchical cluster summaries (L1 clusters) for each document, enabling multi-resolution retrieval
+- **BM25:** `bm25_index.py` maintains a sparse keyword index fused with vector results via Reciprocal Rank Fusion (`rrf_fuse`)
 
 ---
 
 ## 4. The Multi-Agent Swarm
 
-The core intelligence lives in [swarm.py](file:///c:/Users/aidan/OneDrive%20-%20Duke%20University/Code/ContAInnum_Atlas2.0_backup_20260124_181415/src/backend/app/services/swarm.py) (2,787 lines), orchestrated via LangGraph `StateGraph` objects.
+The core intelligence lives in `swarm.py` (2,787 lines), orchestrated via LangGraph `StateGraph` objects.
 
 ### 4.1 Query Routing
 
 ```mermaid
 flowchart TD
-    Q["User Query"] --> MR["Meta-Router<br/>meta_router.py"]
-    MR -->|"SIMPLE"| LIB["🔍 Librarian<br/>Fast vector lookup<br/>2 nodes, ~5s"]
-    MR -->|"DEEP_DISCOVERY"| NAV["🧭 Navigator 2.0<br/>Multi-turn reflection<br/>5 nodes, ~30-60s"]
-    MR -->|"BROAD_RESEARCH"| CTX["🧠 Cortex MoE<br/>Task decomposition<br/>6+ nodes, ~60-120s"]
-    MR -->|"MULTI_STEP"| BOTH["Navigator + Cortex<br/>Sequential pipeline"]
+    Q["User Query"] --> MR["Meta-Router"]
+    MR -->|SIMPLE| LIB["Librarian - Fast vector lookup - 2 nodes, ~5s"]
+    MR -->|DEEP_DISCOVERY| NAV["Navigator 2.0 - Multi-turn reflection - 5 nodes, ~30-60s"]
+    MR -->|BROAD_RESEARCH| CTX["Cortex MoE - Task decomposition - 6+ nodes, ~60-120s"]
+    MR -->|MULTI_STEP| BOTH["Navigator + Cortex Sequential pipeline"]
 
-    LIB --> ANS["Synthesized Answer<br/>+ Confidence Score<br/>+ Citations"]
+    LIB --> ANS["Synthesized Answer + Confidence Score + Citations"]
     NAV --> ANS
     CTX --> ANS
     BOTH --> ANS
-
-    style MR fill:#F39C12,color:#fff
-    style LIB fill:#3498DB,color:#fff
-    style NAV fill:#2ECC71,color:#fff
-    style CTX fill:#9B59B6,color:#fff
 ```
 
-The `Meta-Router` ([meta_router.py](file:///c:/Users/aidan/OneDrive%20-%20Duke%20University/Code/ContAInnum_Atlas2.0_backup_20260124_181415/src/backend/app/services/agents/meta_router.py)) classifies each query using a zero-shot LLM classification prompt and also performs **dynamic model swapping** — selecting faster 3B models for simple queries and larger 7B–8B models for deep discovery tasks via `ensure_optimal_model`.
+The `Meta-Router` (`meta_router.py`) classifies each query using a zero-shot LLM classification prompt and also performs **dynamic model swapping** — selecting faster 3B models for simple queries and larger 7B–8B models for deep discovery tasks via `ensure_optimal_model`.
 
 ### 4.2 Librarian Agent (Fast Path)
 
-Defined in [librarian.py](file:///c:/Users/aidan/OneDrive%20-%20Duke%20University/Code/ContAInnum_Atlas2.0_backup_20260124_181415/src/backend/app/services/agents/librarian.py). A minimal 2-node LangGraph:
+Defined in `librarian.py`. A minimal 2-node LangGraph:
 
 ```
 retrieve_node → answer_node → END
@@ -201,14 +186,11 @@ The Navigator implements multi-turn reflection loops (up to `MAX_REFLECTION_ITER
 
 ```mermaid
 flowchart TD
-    P["Planner Node<br/>Creates reasoning plan<br/>& search terms"] --> R["Retriever Node<br/>Graph walk + vector search<br/>+ BM25 fusion"]
-    R --> RE["Reasoner Node<br/>Synthesizes hypothesis<br/>from evidence"]
-    RE --> CR["Critic Node<br/>Evaluates quality<br/>& identifies gaps"]
-    CR -->|"PASS or<br/>iteration ≥ 3"| F["Final Answer<br/>+ Evidence Map"]
-    CR -->|"REVISE<br/>gaps exist"| P
-
-    style P fill:#1ABC9C,color:#fff
-    style CR fill:#E74C3C,color:#fff
+    P["Planner Node"] --> R["Retriever Node"]
+    R --> RE["Reasoner Node"]
+    RE --> CR["Critic Node"]
+    CR -->|PASS or iteration >= 3| F["Final Answer + Evidence Map"]
+    CR -->|REVISE gaps exist| P
 ```
 
 **State tracked per iteration** (from `NavigatorState` in `swarm.py`):
@@ -220,20 +202,16 @@ flowchart TD
 
 ### 4.4 Cortex MoE (Mixture of Experts)
 
-For broad research queries, the Cortex decomposes the question into sub-tasks and delegates to specialized experts. Built in [supervisor.py](file:///c:/Users/aidan/OneDrive%20-%20Duke%20University/Code/ContAInnum_Atlas2.0_backup_20260124_181415/src/backend/app/services/agents/supervisor.py):
+For broad research queries, the Cortex decomposes the question into sub-tasks and delegates to specialized experts. Built in `supervisor.py`:
 
 ```mermaid
 flowchart TD
-    SUP["Supervisor<br/>Decomposes query into<br/>sub-tasks"] --> HYP["Hypothesis Expert<br/>Generates ranked<br/>hypotheses"]
-    HYP --> RET["Retrieval Expert<br/>Targeted evidence<br/>gathering"]
-    RET --> WRT["Writer Expert<br/>Drafts cited<br/>research prose"]
-    WRT --> AUD["Grounding Auditor<br/>Verifies every claim<br/>against source text"]
-    AUD -->|"PASS"| SYN["Supervisor Synthesize<br/>Final answer"]
-    AUD -->|"FAIL<br/>round < max"| RET
-
-    style SUP fill:#F39C12,color:#fff
-    style AUD fill:#E74C3C,color:#fff
-    style SYN fill:#27AE60,color:#fff
+    SUP["Supervisor - Decomposes query"] --> HYP["Hypothesis Expert"]
+    HYP --> RET["Retrieval Expert"]
+    RET --> WRT["Writer Expert"]
+    WRT --> AUD["Grounding Auditor"]
+    AUD -->|PASS| SYN["Supervisor Synthesize"]
+    AUD -->|FAIL round < max| RET
 ```
 
 **MoE State** (`MoEState` in `supervisor.py`) tracks:
@@ -245,7 +223,7 @@ flowchart TD
 
 ### 4.5 Grounding Verifier (Anti-Hallucination)
 
-Defined in [grounding.py](file:///c:/Users/aidan/OneDrive%20-%20Duke%20University/Code/ContAInnum_Atlas2.0_backup_20260124_181415/src/backend/app/services/agents/grounding.py). Every factual claim in an agent's output is individually checked:
+Defined in `grounding.py`. Every factual claim in an agent's output is individually checked:
 
 1. **Claim Extraction:** LLM call decomposes the answer into numbered factual claims
 2. **Per-Claim Verification:** Each claim is embedded and searched against Qdrant; cosine similarity determines badge level:
@@ -270,9 +248,9 @@ Atlas targets the **NVIDIA RTX 3050 (4 GB VRAM)** as the minimum hardware. Every
 | **GLiNER NER** | `_extract_entities_gliner` in `ingest.py` | ~50x faster than LLM-based extraction, ~50 MB model footprint |
 | **Rustworkx over NetworkX** | `get_rustworkx_subgraph` in `graph.py` | C/Rust graph math is orders of magnitude faster than pure Python |
 | **Embedded Qdrant** | In-process path mode (no separate server) | Zero network overhead, single-process memory management |
-| **Prompt Templates** | [prompt_templates.py](file:///c:/Users/aidan/OneDrive%20-%20Duke%20University/Code/ContAInnum_Atlas2.0_backup_20260124_181415/src/backend/app/services/prompt_templates.py) (750 lines) | Few-shot examples tuned per node reduce hallucination in small models |
+| **Prompt Templates** | `prompt_templates.py` (750 lines) | Few-shot examples tuned per node reduce hallucination in small models |
 
-### LLM Configuration (from [config.py](file:///c:/Users/aidan/OneDrive%20-%20Duke%20University/Code/ContAInnum_Atlas2.0_backup_20260124_181415/src/backend/app/core/config.py)):
+### LLM Configuration (from `config.py`):
 ```
 LLM_CONTEXT_SIZE    = 8192    # 8K context window (4096 for 3B if OOM)
 LLM_N_BATCH         = 512     # Batch size for prompt processing
@@ -284,18 +262,18 @@ DEFAULT_GPU_LAYERS   = 35     # Partial VRAM offload
 
 ## 6. Data Model & Storage
 
-All persistence is defined in [database.py](file:///c:/Users/aidan/OneDrive%20-%20Duke%20University/Code/ContAInnum_Atlas2.0_backup_20260124_181415/src/backend/app/core/database.py):
+All persistence is defined in `database.py`:
 
 ```mermaid
 erDiagram
     Project ||--o{ Document : contains
     Project ||--o{ Node : scopes
     Project ||--o{ Edge : scopes
-    Document ||--o{ DocumentChunk : "split into"
-    Document ||--o{ Node : "extracted from"
-    Document ||--o{ Edge : "extracted from"
-    Node ||--o{ Edge : "source of"
-    Node ||--o{ Edge : "target of"
+    Document ||--o{ DocumentChunk : splits_into
+    Document ||--o{ Node : extracted_from
+    Document ||--o{ Edge : extracted_from
+    Node ||--o{ Edge : source_of
+    Node ||--o{ Edge : target_of
 
     Project {
         string id PK
@@ -354,14 +332,13 @@ SUPPORTS, CLINICAL_TRIAL_FOR, TREATS, DIAGNOSES, MEASURED_BY,
 AUTHORED_BY, PUBLISHED_IN, FUNDED_BY
 ```
 
-> [!NOTE]
-> The edge types `CLINICAL_TRIAL_FOR`, `TREATS`, and `DIAGNOSES` are already built into the ontology — the codebase was designed with biomedical discovery in mind from day one.
+> **Note:** The edge types `CLINICAL_TRIAL_FOR`, `TREATS`, and `DIAGNOSES` are already built into the ontology — the codebase was designed with biomedical discovery in mind from day one.
 
 ---
 
 ## 7. Configuration & Extensibility
 
-All 50+ parameters are defined in a single `Settings` class in [config.py](file:///c:/Users/aidan/OneDrive%20-%20Duke%20University/Code/ContAInnum_Atlas2.0_backup_20260124_181415/src/backend/app/core/config.py), loaded from `.env`:
+All 50+ parameters are defined in a single `Settings` class in `config.py`, loaded from `.env`:
 
 | Category | Parameters | Defaults |
 |---|---|---|
@@ -388,42 +365,36 @@ Just as Windows provides the kernel and UI while third-party "apps" provide spec
 
 ```mermaid
 flowchart TB
-    subgraph "Phase 1: Hit Identification"
-        A["Researcher defines<br/>target & goals"] --> B["Predictive Model App<br/>(DECL, ChemProp, etc.)"]
-        B --> C["AI Agent filters &<br/>ranks hit compounds"]
+    subgraph P1["Phase 1: Hit Identification"]
+        A["Researcher defines target and goals"] --> B["Predictive Model App - DECL, ChemProp"]
+        B --> C["AI Agent filters and ranks hit compounds"]
     end
 
-    subgraph "Phase 2: Structure Design & Synthesis"
-        C --> D["Generative Chemistry Agent<br/>proposes optimized structures"]
-        D --> E["Retrosynthesis Engine App<br/>computes synthesis pathways"]
-        E --> F["🧪 Researcher performs<br/>synthesis in lab"]
-        F -->|"Step failed"| E
+    subgraph P2["Phase 2: Structure Design and Synthesis"]
+        C --> D["Generative Chemistry Agent"]
+        D --> E["Retrosynthesis Engine App"]
+        E --> F["Researcher performs synthesis in lab"]
+        F -->|Step failed| E
     end
 
-    subgraph "Phase 3: Verification"
-        F --> G["Upload raw NMR /<br/>Mass Spec data"]
-        G --> H["Spectroscopy Agent<br/>interprets NMR/MS"]
-        H -->|"Match ✓"| I["Verified Molecule"]
-        H -->|"Mismatch ✗"| E
+    subgraph P3["Phase 3: Verification"]
+        F --> G["Upload raw NMR / Mass Spec data"]
+        G --> H["Spectroscopy Agent interprets NMR/MS"]
+        H -->|Match| I["Verified Molecule"]
+        H -->|Mismatch| E
     end
 
-    subgraph "Phase 4: Biological Testing"
-        I --> J["Biological Assay Agent<br/>designs & interprets assays"]
-        J --> K{"Efficacy<br/>Threshold?"}
-        K -->|"Pass"| L["Candidate Pool"]
-        K -->|"Fail"| D
+    subgraph P4["Phase 4: Biological Testing"]
+        I --> J["Biological Assay Agent"]
+        J --> K{Efficacy Threshold?}
+        K -->|Pass| L["Candidate Pool"]
+        K -->|Fail| D
     end
 
-    subgraph "Phase 5: Clinical Readiness (Future)"
-        L --> M["Regulatory Agent<br/>FDA, scalability checks"]
-        M --> N["Clinical Trial Matcher<br/>ClinicalTrials.gov integration"]
+    subgraph P5["Phase 5: Clinical Readiness"]
+        L --> M["Regulatory Agent - FDA, scalability"]
+        M --> N["Clinical Trial Matcher"]
     end
-
-    style A fill:#3498DB,color:#fff
-    style F fill:#E67E22,color:#fff
-    style H fill:#2ECC71,color:#fff
-    style J fill:#9B59B6,color:#fff
-    style M fill:#E74C3C,color:#fff
 ```
 
 ### 8.3 Why Glycans Are the "Killer App"
@@ -446,23 +417,23 @@ Glycans are critical in biological signaling, immune response, and disease marke
 
 ```mermaid
 graph TB
-    subgraph "Atlas OS Kernel"
-        K1["Agent Orchestrator<br/>(LangGraph Swarm)"]
-        K2["Knowledge Substrate<br/>(Qdrant + Rustworkx + SQLite)"]
-        K3["LLM Service<br/>(Local + Cloud Hybrid)"]
+    subgraph KERNEL["Atlas OS Kernel"]
+        K1["Agent Orchestrator - LangGraph Swarm"]
+        K2["Knowledge Substrate - Qdrant + Rustworkx + SQLite"]
+        K3["LLM Service - Local + Cloud Hybrid"]
         K4["Grounding Verifier"]
     end
 
-    subgraph "Discovery Apps (Plugins)"
-        P1["🔬 Retrosynthesis Engine"]
-        P2["📊 NMR/MS Interpreter"]
-        P3["🧬 Biological Assay Analyzer"]
-        P4["📋 FDA Regulatory Checker"]
-        P5["🏥 Clinical Trial Matcher"]
-        P6["⚗️ DECL/ChemProp Connector"]
+    subgraph PLUGINS["Discovery Apps - Plugins"]
+        P1["Retrosynthesis Engine"]
+        P2["NMR/MS Interpreter"]
+        P3["Biological Assay Analyzer"]
+        P4["FDA Regulatory Checker"]
+        P5["Clinical Trial Matcher"]
+        P6["DECL/ChemProp Connector"]
     end
 
-    subgraph "Future Third-Party Apps"
+    subgraph THIRD["Future Third-Party Apps"]
         T1["Lab X: Custom QSAR Predictor"]
         T2["Lab Y: Glycan Pathway DB"]
         T3["Lab Z: Cell Line Screener"]
@@ -480,15 +451,9 @@ graph TB
     K2 --> K1
     K3 --> K1
     K4 --> K1
-
-    style K1 fill:#2C3E50,color:#fff
-    style K2 fill:#2C3E50,color:#fff
-    style K3 fill:#2C3E50,color:#fff
-    style K4 fill:#2C3E50,color:#fff
 ```
 
-> [!IMPORTANT]
-> The plugin system is the fundamental differentiator from Recursion, Schrödinger, and BenevolentAI — all of which are closed, vertically integrated pipelines. Atlas is the **open, local-first OS** where labs keep their IP entirely on their own machines.
+> **Important:** The plugin system is the fundamental differentiator from Recursion, Schrodinger, and BenevolentAI — all of which are closed, vertically integrated pipelines. Atlas is the **open, local-first OS** where labs keep their IP entirely on their own machines.
 
 ---
 
@@ -498,23 +463,22 @@ graph TB
 
 | Algorithm Type | Maturity | Atlas Integration Strategy |
 |---|---|---|
-| **Property Prediction** (ChemProp, ADMET models) | ✅ Production-ready | Wrap as a plugin; AI agent invokes via API |
-| **Structure Prediction** (AlphaFold 3, RoseTTAFold) | ✅ Production-ready for proteins | Integrate for target validation, not synthesis |
-| **Retrosynthesis** (AiZynthFinder, ASKCOS) | ⚠️ Good for simple molecules, weak for complex stereochemistry | Use as starting point; **the feedback loop with the researcher is the key differentiator** |
-| **NMR Prediction** (MestReNova, nmrshiftdb2) | ⚠️ Reference databases exist; AI interpretation is nascent | Train/fine-tune an NMR comparison agent |
-| **Glycan-Specific Pathways** | ❌ Open-source tools are minimal | **This is the gap Atlas fills** — build from first principles with researcher-in-the-loop |
+| **Property Prediction** (ChemProp, ADMET models) | Production-ready | Wrap as a plugin; AI agent invokes via API |
+| **Structure Prediction** (AlphaFold 3, RoseTTAFold) | Production-ready for proteins | Integrate for target validation, not synthesis |
+| **Retrosynthesis** (AiZynthFinder, ASKCOS) | Good for simple molecules, weak for complex stereochemistry | Use as starting point; **the feedback loop with the researcher is the key differentiator** |
+| **NMR Prediction** (MestReNova, nmrshiftdb2) | Reference databases exist; AI interpretation is nascent | Train/fine-tune an NMR comparison agent |
+| **Glycan-Specific Pathways** | Open-source tools are minimal | **This is the gap Atlas fills** — build from first principles with researcher-in-the-loop |
 
 ### 9.2 How can robots handle synthesis?
 
 | Task | Robotic Readiness | Atlas Strategy |
 |---|---|---|
-| **High-Throughput Screening** (moving liquids into 96/384-well plates) | ✅ Mature (Opentrons, Hamilton, Beckman) | Integrate plate reader data as an input "app" |
-| **Simple Liquid Handling** (dilutions, mixing) | ✅ Mature | Not a priority — already commoditized |
-| **Organic Synthesis** (reflux, air-sensitive reagents, chromatography) | ❌ Extremely difficult to roboticize | **Keep human-driven.** Atlas acts as the brain; the researcher acts as the hands |
-| **Automated Flow Chemistry** (ChemSpeed, Syrris) | ⚠️ Specialized, expensive machines | Long-term integration target (Year 2+) |
+| **High-Throughput Screening** (moving liquids into 96/384-well plates) | Mature (Opentrons, Hamilton, Beckman) | Integrate plate reader data as an input app |
+| **Simple Liquid Handling** (dilutions, mixing) | Mature | Not a priority — already commoditized |
+| **Organic Synthesis** (reflux, air-sensitive reagents, chromatography) | Extremely difficult to roboticize | **Keep human-driven.** Atlas acts as the brain; the researcher acts as the hands |
+| **Automated Flow Chemistry** (ChemSpeed, Syrris) | Specialized, expensive machines | Long-term integration target (Year 2+) |
 
-> [!TIP]
-> Atlas's value is in the **informational bottleneck**, not the physical one. Design the pathway, interpret the NMR, decide what to screen next — these are the cognitive tasks where AI creates leverage. The wet lab work stays human.
+> **Tip:** Atlas's value is in the **informational bottleneck**, not the physical one. Design the pathway, interpret the NMR, decide what to screen next — these are the cognitive tasks where AI creates leverage. The wet lab work stays human.
 
 ### 9.3 How Atlas differs from Recursion Pharmaceuticals
 
@@ -523,7 +487,7 @@ graph TB
 | **Model** | Closed, centralized cloud platform | Open, local-first Desktop OS |
 | **Data Ownership** | Your data lives on their servers | Your data never leaves your machine |
 | **Extensibility** | Their pipeline, their algorithms | Plugin architecture — bring your own models |
-| **Target Market** | Enterprise pharma with $B R&D budgets | Academic labs, DIC programs, emerging biotech |
+| **Target Market** | Enterprise pharma with $B R&D budgets | Academic labs, startups, emerging biotech |
 | **Hardware** | Massive GPU clusters | Consumer GPU (RTX 3050+) |
 | **Lock-in** | High | Zero |
 
@@ -531,7 +495,7 @@ graph TB
 
 ## 10. Roadmap
 
-### For NYUSH DIC Delivery
+### For a16z / YC Delivery
 
 ```mermaid
 gantt
@@ -539,26 +503,26 @@ gantt
     dateFormat YYYY-MM
     axisFormat %b %Y
 
-    section Phase 1: Plugin Infrastructure
-    App/plugin architecture design     :p1a, 2026-03, 2026-04
-    Non-text data ingestion (JCAMP-DX, Bruker) :p1b, 2026-04, 2026-05
-    Plugin SDK + API contract          :p1c, 2026-04, 2026-06
+    section Phase 1 Plugin Infrastructure
+    App plugin architecture design     :p1a, 2026-03, 2026-04
+    Non-text data ingestion            :p1b, 2026-04, 2026-05
+    Plugin SDK and API contract        :p1c, 2026-04, 2026-06
 
-    section Phase 2: Retrosynthesis Copilot
+    section Phase 2 Retrosynthesis Copilot
     Integrate AiZynthFinder            :p2a, 2026-06, 2026-07
     Synthesis Feedback Loop agent      :p2b, 2026-06, 2026-08
-    Glycan stereochemistry fine-tuning :p2c, 2026-07, 2026-09
+    Glycan stereochemistry tuning      :p2c, 2026-07, 2026-09
 
-    section Phase 3: Verification Engine
+    section Phase 3 Verification Engine
     NMR spectra prediction agent       :p3a, 2026-09, 2026-11
-    NMR/MS comparison & confidence     :p3b, 2026-10, 2026-12
+    NMR MS comparison and confidence   :p3b, 2026-10, 2026-12
 
-    section Phase 4: Closed Pipeline
+    section Phase 4 Closed Pipeline
     Biological assay feedback loop     :p4a, 2027-01, 2027-03
-    ClinicalTrials.gov + FDA connectors:p4b, 2027-02, 2027-06
+    ClinicalTrials and FDA connectors  :p4b, 2027-02, 2027-06
 
-    section Phase 5: Platform Release
-    Third-party plugin SDK public beta :p5a, 2027-06, 2027-09
+    section Phase 5 Platform Release
+    Third-party plugin SDK beta        :p5a, 2027-06, 2027-09
     Lab partnership program            :p5b, 2027-06, 2027-12
 ```
 
@@ -566,10 +530,10 @@ gantt
 
 | Phase | Timeline | Deliverables | Success Criteria |
 |---|---|---|---|
-| **1: Plugin Infrastructure** | Months 1–3 | App architecture, non-text data ingestion (NMR formats: JCAMP-DX, Bruker), Plugin SDK | A third-party Python script can register as an Atlas "app" and be invoked by the agent swarm |
+| **1: Plugin Infrastructure** | Months 1–3 | App architecture, non-text data ingestion (NMR formats: JCAMP-DX, Bruker), Plugin SDK | A third-party Python script can register as an Atlas app and be invoked by the agent swarm |
 | **2: Retrosynthesis Copilot** | Months 3–6 | AiZynthFinder integration, Synthesis Feedback Loop, glycan stereochemistry fine-tuning | Researcher inputs a failed step, agent recalculates pathway within 60 seconds |
 | **3: Verification Engine** | Months 6–9 | NMR spectra predictor, NMR/MS comparison agent with confidence scoring | AI outputs "85% match to target glycan, 15% chance stereoisomer" from raw NMR data |
-| **4: Closed Pipeline** | Months 9–15 | Biological assay feedback loop, ClinicalTrials.gov and FDA regulatory connectors | End-to-end: hit → design → synthesis → verify → assay → regulatory check with zero manual data transfer |
+| **4: Closed Pipeline** | Months 9–15 | Biological assay feedback loop, ClinicalTrials.gov and FDA regulatory connectors | End-to-end: hit to design to synthesis to verify to assay to regulatory check with zero manual data transfer |
 | **5: Platform Release** | Year 2+ | Public plugin SDK, lab partnership program, ecosystem growth | External labs building and publishing their own Atlas apps |
 
 ---
