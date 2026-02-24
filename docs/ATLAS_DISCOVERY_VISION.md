@@ -511,49 +511,55 @@ Glycan synthesis is the single hardest unsolved problem in synthetic chemistry. 
 
 This is "Intel Inside" for chemistry: you don't switch away from the platform that solved the thing nobody else could.
 
-### 9.4 Total Addressable Market: Beyond Pharma
+### 9.4 Total Addressable Market: Every Company That Does R&D
 
-Targeting only biotech labs keeps Atlas small. But the predict → synthesize → verify → iterate loop is universal across all R&D:
+Targeting only biotech labs keeps Atlas small. But the core loop — **hypothesize → build → test → learn → iterate** — is not unique to chemistry. It is the universal loop of all research and development, everywhere.
 
-| Industry | R&D Spend (Global) | How Atlas Applies |
+ASML spends $4B/yr on R&D to engineer next-generation lithography machines. Apple spends $30B/yr designing the next iPhone. NVIDIA spends $10B/yr creating new chip architectures. F1 teams spend $150M+/yr developing aerodynamic packages. Every single one of these organizations has researchers drowning in documents, experimental data, and iterative design cycles that Atlas can accelerate.
+
+| Industry | Global R&D Spend | How Atlas Applies |
 |---|---|---|
-| **Pharmaceuticals** | $250B/yr | Drug discovery, glycan therapeutics, biologics |
-| **Materials Science** | $50B/yr | Polymer design, catalyst discovery, alloy optimization |
-| **Agricultural Chemistry** | $15B/yr | Pesticide/herbicide design, crop protection molecules |
+| **Pharmaceuticals and Biotech** | $250B/yr | Drug discovery, glycan therapeutics, biologics, clinical trial optimization |
+| **Semiconductors** (ASML, NVIDIA, TSMC, Intel) | $150B/yr | Process node R&D, materials characterization, yield optimization, chip architecture iteration |
+| **Consumer Electronics** (Apple, Samsung, Sony) | $80B/yr | Materials testing, component design iteration, failure analysis across product generations |
+| **Automotive and Motorsport** (F1, Tesla, Toyota) | $120B/yr | Aerodynamics iteration, battery chemistry, powertrain development, CFD-to-wind-tunnel feedback loops |
+| **Aerospace and Defense** (Lockheed, SpaceX, Boeing) | $100B/yr | Materials qualification, propulsion R&D, structural testing, compliance documentation |
+| **Materials Science** | $50B/yr | Polymer design, catalyst discovery, alloy optimization, coating formulation |
 | **Battery and Energy** | $30B/yr | Electrolyte design, solid-state materials, catalyst screening |
-| **Specialty Chemicals** | $40B/yr | Fragrance/flavor molecules, industrial coatings, adhesives |
-| **Academic Research** | $700B/yr (all fields) | Any lab doing experimental research with documents and data |
+| **Agricultural Chemistry** | $15B/yr | Crop protection molecules, pesticide/herbicide design |
+| **Academic Research** (all fields) | $700B/yr | Any lab doing experimental research with documents and iterative data |
 
-The total addressable market is not "biotech startups" — it's **every organization on Earth that does experimental R&D** (~$1T/yr). Atlas starts with pharma (highest pain, highest willingness to pay) and expands horizontally as the plugin ecosystem matures.
+The total addressable market is not "biotech startups" — it is **every organization on Earth that iterates on experimental R&D**. That is **$2.5T+/yr** in global R&D spending. Atlas starts with pharma (highest pain, deepest domain complexity) and expands horizontally because the OS layer is domain-agnostic — only the plugins change.
 
 ### 9.5 How Atlas Wins: The Playbook
 
 ```mermaid
 flowchart LR
-    subgraph YEAR1["Year 1: Wedge"]
-        W1["Crack glycan retrosynthesis"] --> W2["First 10 pharma lab users"]
-        W2 --> W3["Prove the closed-loop works"]
+    subgraph Q1["Months 1-3"]
+        W1["Plugin architecture + SDK"] --> W2["Glycan retrosynthesis copilot"]
+        W2 --> W3["First 5 lab partnerships"]
     end
 
-    subgraph YEAR2["Year 2: Ecosystem"]
-        W3 --> E1["Open plugin SDK"]
-        E1 --> E2["Third-party tools built on Atlas"]
-        E2 --> E3["Network effects compound"]
+    subgraph Q2["Months 4-6"]
+        W3 --> E1["NMR verification engine"]
+        E1 --> E2["Closed-loop demo"]
+        E2 --> E3["a16z/YC pitch with working product"]
     end
 
-    subgraph YEAR3["Year 3: Platform"]
-        E3 --> P1["Expand to materials, ag-chem, energy"]
-        P1 --> P2["Atlas becomes the R&D OS standard"]
-        P2 --> P3["Revenue from enterprise licenses + plugin marketplace"]
+    subgraph Q3["Months 7-12"]
+        E3 --> P1["Third-party plugins launch"]
+        P1 --> P2["Expand beyond pharma"]
+        P2 --> P3["Enterprise licenses + plugin marketplace"]
     end
 ```
 
 **The sequence matters:**
 
 1. **Win the hardest problem first** (glycan synthesis) — this earns credibility that no amount of marketing can buy
-2. **Build the ecosystem** (plugin SDK) — this creates switching costs that compound over time  
-3. **Expand horizontally** (materials, ag-chem, energy) — the OS layer generalizes, only the plugins change
-4. **Monetize the platform** (enterprise licenses + plugin marketplace commission) — this is a $B revenue model, not a $M one
+2. **Ship the closed loop fast** — a working demo of hit → design → synthesize → verify is worth more than a perfect product
+3. **Build the ecosystem** (plugin SDK) — switching costs compound with every third-party tool built on Atlas
+4. **Expand horizontally** (materials, semiconductors, automotive) — the OS layer generalizes, only the plugins change
+5. **Monetize the platform** (enterprise licenses + marketplace commission) — this is a $B revenue model, not a $M one
 
 ### 9.6 Feasibility Check: Algorithms and Robotics
 
@@ -581,47 +587,44 @@ flowchart LR
 
 ## 10. Roadmap
 
-### For a16z / YC Delivery
+### For a16z / YC Delivery — 12-Month Blitz
 
 ```mermaid
 gantt
-    title Atlas Discovery OS Roadmap
+    title Atlas Discovery OS - 12 Month Blitz
     dateFormat YYYY-MM
     axisFormat %b %Y
 
-    section Phase 1 Plugin Infrastructure
-    App plugin architecture design     :p1a, 2026-03, 2026-04
-    Non-text data ingestion            :p1b, 2026-04, 2026-05
-    Plugin SDK and API contract        :p1c, 2026-04, 2026-06
+    section Phase 1 Foundation
+    Plugin architecture and SDK        :p1a, 2026-03, 2026-04
+    Non-text data ingestion            :p1b, 2026-03, 2026-04
+    AiZynthFinder integration          :p1c, 2026-04, 2026-05
 
-    section Phase 2 Retrosynthesis Copilot
-    Integrate AiZynthFinder            :p2a, 2026-06, 2026-07
-    Synthesis Feedback Loop agent      :p2b, 2026-06, 2026-08
-    Glycan stereochemistry tuning      :p2c, 2026-07, 2026-09
+    section Phase 2 Synthesis Copilot
+    Synthesis Feedback Loop agent      :p2a, 2026-05, 2026-06
+    Glycan stereochemistry tuning      :p2b, 2026-05, 2026-06
+    NMR verification engine            :p2c, 2026-06, 2026-07
 
-    section Phase 3 Verification Engine
-    NMR spectra prediction agent       :p3a, 2026-09, 2026-11
-    NMR MS comparison and confidence   :p3b, 2026-10, 2026-12
+    section Phase 3 Closed Loop Demo
+    Biological assay feedback loop     :p3a, 2026-07, 2026-08
+    End-to-end pipeline validation     :p3b, 2026-08, 2026-09
+    First 5 lab partnerships live      :p3c, 2026-08, 2026-09
 
-    section Phase 4 Closed Pipeline
-    Biological assay feedback loop     :p4a, 2027-01, 2027-03
-    ClinicalTrials and FDA connectors  :p4b, 2027-02, 2027-06
-
-    section Phase 5 Platform Release
-    Third-party plugin SDK beta        :p5a, 2027-06, 2027-09
-    Lab partnership program            :p5b, 2027-06, 2027-12
+    section Phase 4 Scale
+    Third-party plugin SDK public      :p4a, 2026-09, 2026-11
+    Enterprise pilot deployments       :p4b, 2026-10, 2027-01
+    Regulatory and clinical connectors :p4c, 2026-11, 2027-02
 ```
 
 ### Phase Details
 
 | Phase | Timeline | Deliverables | Success Criteria |
 |---|---|---|---|
-| **1: Plugin Infrastructure** | Months 1–3 | App architecture, non-text data ingestion (NMR formats: JCAMP-DX, Bruker), Plugin SDK | A third-party Python script can register as an Atlas app and be invoked by the agent swarm |
-| **2: Retrosynthesis Copilot** | Months 3–6 | AiZynthFinder integration, Synthesis Feedback Loop, glycan stereochemistry fine-tuning | Researcher inputs a failed step, agent recalculates pathway within 60 seconds |
-| **3: Verification Engine** | Months 6–9 | NMR spectra predictor, NMR/MS comparison agent with confidence scoring | AI outputs "85% match to target glycan, 15% chance stereoisomer" from raw NMR data |
-| **4: Closed Pipeline** | Months 9–15 | Biological assay feedback loop, ClinicalTrials.gov and FDA regulatory connectors | End-to-end: hit to design to synthesis to verify to assay to regulatory check with zero manual data transfer |
-| **5: Platform Release** | Year 2+ | Public plugin SDK, lab partnership program, ecosystem growth | External labs building and publishing their own Atlas apps |
+| **1: Foundation** | Weeks 1–8 | Plugin SDK, non-text data ingestion (JCAMP-DX, Bruker), AiZynthFinder retrosynthesis integration | A Python plugin registers with Atlas and the agent swarm can invoke it end-to-end |
+| **2: Synthesis Copilot** | Weeks 8–16 | Synthesis Feedback Loop, glycan stereochemistry agent, NMR/MS verification engine | Researcher inputs a failed synthesis step, agent recalculates pathway in under 60 seconds; NMR agent outputs confidence score |
+| **3: Closed Loop Demo** | Weeks 16–24 | Biological assay feedback loop, end-to-end pipeline validation, first 5 lab partnerships | Working demo: hit identification to synthesis to NMR verification to assay to decision — zero manual data transfer |
+| **4: Scale** | Weeks 24–48 | Public plugin SDK, enterprise pilots, regulatory/clinical connectors | Third-party developers shipping plugins; enterprise license revenue; FDA/ClinicalTrials.gov integration live |
 
 ---
 
-> *"Atlas is not another AI tool. It is the operating system for scientific discovery — starting with the hardest molecule class on Earth."*
+> *"Atlas is not another AI tool. It is the operating system for R&D — starting with the hardest molecule class on Earth, then expanding to every industry that builds the future."*
