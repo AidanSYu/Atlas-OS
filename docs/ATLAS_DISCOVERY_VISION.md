@@ -457,39 +457,125 @@ graph TB
 
 ---
 
-## 9. Critical Feasibility Analysis
+## 9. Competitive Landscape, Moat, and Strategy
 
-### 9.1 Are current predictive algorithms good enough?
+### 9.1 Competitor Analysis
 
-| Algorithm Type | Maturity | Atlas Integration Strategy |
+The AI-for-science space is heavily funded but fragmented. Every competitor solves one slice of the R&D pipeline — none provides an open OS layer.
+
+| Company | Funding | What They Do | Weakness Atlas Exploits |
+|---|---|---|---|
+| **Recursion Pharmaceuticals** | $1.5B+ raised, public (RXRX) | Closed-loop phenomics + ML drug discovery | Fully closed platform. Your data is their data. No plugin system. Only accessible to $B pharma budgets. |
+| **Schrödinger** | Public (SDGR), $600M+ rev | Physics-based molecular simulation + ML | Licensing model ($100K+/yr per seat). Black-box solvers. No agentic AI, no knowledge graph. |
+| **Insilico Medicine** | $400M+ raised | End-to-end AI drug discovery (target ID to clinical) | Proprietary pipeline — you use their targets, their chemistry. No local deployment. |
+| **BenevolentAI** | Public (BAI), $400M+ raised | Knowledge graph for target discovery | Knowledge graph only — no synthesis planning, no NMR verification, no closed-loop feedback. |
+| **Relay Therapeutics** | $700M+ raised | Motion-based drug design (protein dynamics) | Narrow focus on protein motion. No OS layer, no generalized R&D capability. |
+| **PostEra** | $26M raised | ML for medicinal chemistry (Manifold platform) | Chemistry-only. No document intelligence, no knowledge graph, no multi-agent reasoning. |
+| **Chemify** | $60M raised (Lee Cronin) | Automated chemical synthesis via "chemputation" | Hardware-dependent. Requires their proprietary robots. Not software-first. |
+| **Benchling** | $6.1B valuation | Lab informatics and data management (ELN/LIMS) | Pure data management — zero AI reasoning. No synthesis planning. No agent intelligence. |
+
+**The gap in the market:** Every competitor above is either (a) a closed vertical pipeline you rent, or (b) a point solution for one step. **Nobody is building the open OS that connects all these steps with agentic intelligence.**
+
+### 9.2 Why "Zero Lock-in" Is Not the Moat
+
+Let's be honest: "your data stays local" and "zero lock-in" sound good in a pitch deck, but they are **not defensible**. Any competitor can claim the same thing tomorrow. If the only reason someone uses Atlas is that it's open, they'll leave the moment a closed product is 10% better.
+
+The real question: **What makes Atlas impossible to leave once you're in?**
+
+### 9.3 The Actual Moat: Compound Intelligence
+
+Atlas wins by building three compounding advantages that get stronger with every user and every experiment:
+
+**Moat 1: The Data Flywheel (Synthesis Memory)**
+
+Every time a researcher uses Atlas to plan a synthesis and reports back what worked and what failed, that data trains the local retrosynthesis model. Over time, each lab's Atlas instance becomes a deeply personalized expert on *their specific chemistry*. 
+
+- A lab that has used Atlas for 2 years has 2 years of synthesis memory that no competitor can replicate.
+- This is not transferable — it's embedded in their local knowledge graph.
+- Switching to a competitor means starting from zero.
+
+This is lock-in through *accumulated intelligence*, not through data hostage-taking.
+
+**Moat 2: The Plugin Ecosystem (App Store Effect)**
+
+If the best retrosynthesis plugin, the best NMR interpreter, and the best assay analyzer all run on Atlas, then leaving Atlas means losing access to those tools. This is the iOS/Android playbook:
+
+- Apple doesn't lock you in by holding your photos hostage.
+- Apple locks you in because the best apps are only on iOS.
+
+Atlas's open plugin SDK is not a weakness — it's the mechanism that creates ecosystem lock-in. The more third-party tools built for Atlas, the harder it is to leave.
+
+**Moat 3: The Glycan Wedge (Domain Credibility)**
+
+Glycan synthesis is the single hardest unsolved problem in synthetic chemistry. If Atlas cracks it first — even partially — it earns instant, permanent credibility as the serious platform for hard chemistry. Every pharma company exploring glycan therapeutics (and there are many, because glycans are involved in cancer, autoimmune disease, and viral defense) will come to Atlas because nobody else has a working solution.
+
+This is "Intel Inside" for chemistry: you don't switch away from the platform that solved the thing nobody else could.
+
+### 9.4 Total Addressable Market: Beyond Pharma
+
+Targeting only biotech labs keeps Atlas small. But the predict → synthesize → verify → iterate loop is universal across all R&D:
+
+| Industry | R&D Spend (Global) | How Atlas Applies |
 |---|---|---|
-| **Property Prediction** (ChemProp, ADMET models) | Production-ready | Wrap as a plugin; AI agent invokes via API |
-| **Structure Prediction** (AlphaFold 3, RoseTTAFold) | Production-ready for proteins | Integrate for target validation, not synthesis |
-| **Retrosynthesis** (AiZynthFinder, ASKCOS) | Good for simple molecules, weak for complex stereochemistry | Use as starting point; **the feedback loop with the researcher is the key differentiator** |
-| **NMR Prediction** (MestReNova, nmrshiftdb2) | Reference databases exist; AI interpretation is nascent | Train/fine-tune an NMR comparison agent |
-| **Glycan-Specific Pathways** | Open-source tools are minimal | **This is the gap Atlas fills** — build from first principles with researcher-in-the-loop |
+| **Pharmaceuticals** | $250B/yr | Drug discovery, glycan therapeutics, biologics |
+| **Materials Science** | $50B/yr | Polymer design, catalyst discovery, alloy optimization |
+| **Agricultural Chemistry** | $15B/yr | Pesticide/herbicide design, crop protection molecules |
+| **Battery and Energy** | $30B/yr | Electrolyte design, solid-state materials, catalyst screening |
+| **Specialty Chemicals** | $40B/yr | Fragrance/flavor molecules, industrial coatings, adhesives |
+| **Academic Research** | $700B/yr (all fields) | Any lab doing experimental research with documents and data |
 
-### 9.2 How can robots handle synthesis?
+The total addressable market is not "biotech startups" — it's **every organization on Earth that does experimental R&D** (~$1T/yr). Atlas starts with pharma (highest pain, highest willingness to pay) and expands horizontally as the plugin ecosystem matures.
+
+### 9.5 How Atlas Wins: The Playbook
+
+```mermaid
+flowchart LR
+    subgraph YEAR1["Year 1: Wedge"]
+        W1["Crack glycan retrosynthesis"] --> W2["First 10 pharma lab users"]
+        W2 --> W3["Prove the closed-loop works"]
+    end
+
+    subgraph YEAR2["Year 2: Ecosystem"]
+        W3 --> E1["Open plugin SDK"]
+        E1 --> E2["Third-party tools built on Atlas"]
+        E2 --> E3["Network effects compound"]
+    end
+
+    subgraph YEAR3["Year 3: Platform"]
+        E3 --> P1["Expand to materials, ag-chem, energy"]
+        P1 --> P2["Atlas becomes the R&D OS standard"]
+        P2 --> P3["Revenue from enterprise licenses + plugin marketplace"]
+    end
+```
+
+**The sequence matters:**
+
+1. **Win the hardest problem first** (glycan synthesis) — this earns credibility that no amount of marketing can buy
+2. **Build the ecosystem** (plugin SDK) — this creates switching costs that compound over time  
+3. **Expand horizontally** (materials, ag-chem, energy) — the OS layer generalizes, only the plugins change
+4. **Monetize the platform** (enterprise licenses + plugin marketplace commission) — this is a $B revenue model, not a $M one
+
+### 9.6 Feasibility Check: Algorithms and Robotics
+
+**Are current prediction algorithms good enough for AI to leverage?**
+
+| Algorithm Type | Maturity | Atlas Strategy |
+|---|---|---|
+| **Property Prediction** (ChemProp, ADMET) | Production-ready | Wrap as plugin; AI agent invokes via API |
+| **Structure Prediction** (AlphaFold 3, RoseTTAFold) | Production-ready for proteins | Integrate for target validation |
+| **Retrosynthesis** (AiZynthFinder, ASKCOS) | Good for simple molecules, weak on stereochemistry | Starting point — **the human feedback loop is the differentiator** |
+| **NMR Prediction** (nmrshiftdb2) | Databases exist; AI interpretation is nascent | Train an NMR comparison agent |
+| **Glycan Pathways** | Open-source is minimal | **The gap Atlas fills** — researcher-in-the-loop from day one |
+
+**Can robots handle synthesis?**
 
 | Task | Robotic Readiness | Atlas Strategy |
 |---|---|---|
-| **High-Throughput Screening** (moving liquids into 96/384-well plates) | Mature (Opentrons, Hamilton, Beckman) | Integrate plate reader data as an input app |
-| **Simple Liquid Handling** (dilutions, mixing) | Mature | Not a priority — already commoditized |
-| **Organic Synthesis** (reflux, air-sensitive reagents, chromatography) | Extremely difficult to roboticize | **Keep human-driven.** Atlas acts as the brain; the researcher acts as the hands |
-| **Automated Flow Chemistry** (ChemSpeed, Syrris) | Specialized, expensive machines | Long-term integration target (Year 2+) |
+| **High-Throughput Screening** | Mature (Opentrons, Hamilton) | Integrate plate reader data as input app |
+| **Organic Synthesis** | Extremely difficult to roboticize | **Keep human-driven.** Atlas is the brain, the researcher is the hands |
+| **Automated Flow Chemistry** (ChemSpeed) | Specialized, expensive | Long-term integration target (Year 2+) |
 
-> **Tip:** Atlas's value is in the **informational bottleneck**, not the physical one. Design the pathway, interpret the NMR, decide what to screen next — these are the cognitive tasks where AI creates leverage. The wet lab work stays human.
-
-### 9.3 How Atlas differs from Recursion Pharmaceuticals
-
-| Dimension | Recursion | Atlas |
-|---|---|---|
-| **Model** | Closed, centralized cloud platform | Open, local-first Desktop OS |
-| **Data Ownership** | Your data lives on their servers | Your data never leaves your machine |
-| **Extensibility** | Their pipeline, their algorithms | Plugin architecture — bring your own models |
-| **Target Market** | Enterprise pharma with $B R&D budgets | Academic labs, startups, emerging biotech |
-| **Hardware** | Massive GPU clusters | Consumer GPU (RTX 3050+) |
-| **Lock-in** | High | Zero |
+> **Key insight:** Atlas's value is in the **informational bottleneck**, not the physical one. Design the pathway, interpret the NMR, decide what to screen next — these cognitive tasks are where AI creates 100x leverage. The wet lab stays human for now.
 
 ---
 
