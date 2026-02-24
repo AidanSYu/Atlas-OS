@@ -332,7 +332,8 @@ SUPPORTS, CLINICAL_TRIAL_FOR, TREATS, DIAGNOSES, MEASURED_BY,
 AUTHORED_BY, PUBLISHED_IN, FUNDED_BY
 ```
 
-> **Note:** The edge types `CLINICAL_TRIAL_FOR`, `TREATS`, and `DIAGNOSES` are already built into the ontology — the codebase was designed with biomedical discovery in mind from day one.
+> [!NOTE]
+> The edge types `CLINICAL_TRIAL_FOR`, `TREATS`, and `DIAGNOSES` are already built into the ontology — the codebase was designed with biomedical discovery in mind from day one.
 
 ---
 
@@ -411,6 +412,7 @@ Glycans are critical in biological signaling, immune response, and disease marke
 - **Complex stereochemistry** (anomeric configurations: α vs β glycosidic bonds)
 - **Protecting group orchestration** (dozens of orthogonal protection strategies)
 
+> [!IMPORTANT]
 > A researcher can spend **1–2 years synthesizing a single glycan molecule.** If Atlas can reliably predict retrosynthesis pathways for glycans, it is an immediate, fundamental breakthrough in biochemistry.
 
 ### 8.4 The Plugin Architecture
@@ -453,7 +455,8 @@ graph TB
     K4 --> K1
 ```
 
-> **Important:** The plugin system is the fundamental differentiator from Recursion, Schrodinger, and BenevolentAI — all of which are closed, vertically integrated pipelines. Atlas is the **open, local-first OS** where labs keep their IP entirely on their own machines.
+> [!TIP]
+> The plugin system is the fundamental differentiator from Recursion, Schrodinger, and BenevolentAI — all of which are closed, vertically integrated pipelines. Atlas is the **open, local-first OS** where labs keep their IP entirely on their own machines.
 
 ---
 
@@ -567,20 +570,21 @@ flowchart LR
 
 | Algorithm Type | Maturity | Atlas Strategy |
 |---|---|---|
-| **Property Prediction** (ChemProp, ADMET) | Production-ready | Wrap as plugin; AI agent invokes via API |
-| **Structure Prediction** (AlphaFold 3, RoseTTAFold) | Production-ready for proteins | Integrate for target validation |
-| **Retrosynthesis** (AiZynthFinder, ASKCOS) | Good for simple molecules, weak on stereochemistry | Starting point — **the human feedback loop is the differentiator** |
-| **NMR Prediction** (nmrshiftdb2) | Databases exist; AI interpretation is nascent | Train an NMR comparison agent |
-| **Glycan Pathways** | Open-source is minimal | **The gap Atlas fills** — researcher-in-the-loop from day one |
+| **Property Prediction** (ChemProp, ADMET) | 🟢 Production-ready | Wrap as plugin; AI agent invokes via API |
+| **Structure Prediction** (AlphaFold 3, RoseTTAFold) | 🟢 Production-ready for proteins | Integrate for target validation |
+| **Retrosynthesis** (AiZynthFinder, ASKCOS) | 🟡 Good for simple, weak on stereochem | Starting point — **human feedback loop is key** |
+| **NMR Prediction** (nmrshiftdb2) | 🟡 Databases exist; AI interpretation nascent | Train an NMR comparison agent |
+| **Glycan Pathways** | 🔴 Open-source is minimal | **The gap Atlas fills** — researcher-in-the-loop |
 
 **Can robots handle synthesis?**
 
 | Task | Robotic Readiness | Atlas Strategy |
 |---|---|---|
-| **High-Throughput Screening** | Mature (Opentrons, Hamilton) | Integrate plate reader data as input app |
-| **Organic Synthesis** | Extremely difficult to roboticize | **Keep human-driven.** Atlas is the brain, the researcher is the hands |
-| **Automated Flow Chemistry** (ChemSpeed) | Specialized, expensive | Long-term integration target (Year 2+) |
+| **High-Throughput Screening** | 🟢 Mature (Opentrons, Hamilton) | Integrate plate reader data as input app |
+| **Organic Synthesis** | 🔴 Extremely difficult to roboticize | **Keep human-driven.** Atlas = brain, researcher = hands |
+| **Automated Flow Chemistry** (ChemSpeed) | 🟡 Specialized, expensive | Long-term integration target (Year 2+) |
 
+> [!NOTE]
 > **Key insight:** Atlas's value is in the **informational bottleneck**, not the physical one. Design the pathway, interpret the NMR, decide what to screen next — these cognitive tasks are where AI creates 100x leverage. The wet lab stays human for now.
 
 ---
@@ -620,10 +624,10 @@ gantt
 
 | Phase | Timeline | Deliverables | Success Criteria |
 |---|---|---|---|
-| **1: Foundation** | Weeks 1–8 | Plugin SDK, non-text data ingestion (JCAMP-DX, Bruker), AiZynthFinder retrosynthesis integration | A Python plugin registers with Atlas and the agent swarm can invoke it end-to-end |
-| **2: Synthesis Copilot** | Weeks 8–16 | Synthesis Feedback Loop, glycan stereochemistry agent, NMR/MS verification engine | Researcher inputs a failed synthesis step, agent recalculates pathway in under 60 seconds; NMR agent outputs confidence score |
-| **3: Closed Loop Demo** | Weeks 16–24 | Biological assay feedback loop, end-to-end pipeline validation, first 5 lab partnerships | Working demo: hit identification to synthesis to NMR verification to assay to decision — zero manual data transfer |
-| **4: Scale** | Weeks 24–48 | Public plugin SDK, enterprise pilots, regulatory/clinical connectors | Third-party developers shipping plugins; enterprise license revenue; FDA/ClinicalTrials.gov integration live |
+| 🧱 **1: Foundation** | Weeks 1–8 | Plugin SDK, non-text data ingestion, AiZynthFinder integration | A Python plugin registers with Atlas and is invoked end-to-end |
+| 🧑‍🔬 **2: Copilot** | Weeks 8–16 | Synthesis Feedback Loop, stereochemistry agent, NMR verification | Agent recalculates failed pathway in <60s; NMR confidence scored |
+| 🔄 **3: Closed Loop** | Weeks 16–24 | Bio-assay feedback, pipeline validation, first 5 lab partners | Working demo: hit → synthesis → NMR → assay with zero manual transfer |
+| 🚀 **4: Scale** | Weeks 24–48 | Public plugin SDK, enterprise pilots, FDA connectors | Third-party plugins shipped; enterprise revenue; FDA integration live |
 
 ---
 
