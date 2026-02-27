@@ -66,6 +66,14 @@ Project Root
 
 ---
 
+### 🎨 Frontend Development Guidelines (Next.js + Tauri)
+When writing frontend code, you MUST reject "AI slop" aesthetics. Follow these rules or the design will be rejected:
+1. **Unforgettable Design Thinking**: Before coding, explicitly commit to a visual direction (e.g., retro-futuristic, editorial/magazine, brutalist, luxury/refined) and execute it with precision. Banish generic concepts. 
+2. **Typography**: Do not use generic fonts (Arial, Inter, Roboto). Choose beautiful, characterful fonts. Always pair a distinctive display font with a refined body font.
+3. **Spatial Composition**: Use unexpected layouts. Embrace asymmetry, intentional overlapping, diagonal flow, and breaking the grid. Use generous negative space OR highly controlled density.
+4. **Motion & Interaction**: Rely heavily on CSS-only animations for hover and load states to create delight. Focus on high-impact moments (e.g., staggered reveals) over scattered, distracting micro-interactions.
+5. **Color & Texture**: Never use generic purple gradients on white backgrounds. Use CSS variables for a cohesive theme. Add depth via noise textures, gradient meshes, or layered transparencies instead of solid background colors.
+
 ## Development Commands
 
 ### Running the Application

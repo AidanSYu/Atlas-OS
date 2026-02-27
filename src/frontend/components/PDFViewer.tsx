@@ -104,9 +104,17 @@ export default function PDFViewer({
   useEffect(() => {
     const handleSelection = () => {
       const selection = window.getSelection();
+
+      // Ensure selection is within the PDF viewer to prevent Context Engine from reloading on external clicks
+      if (selection && selection.anchorNode && containerRef.current && !containerRef.current.contains(selection.anchorNode)) {
+        return;
+      }
+
       const text = selection?.toString().trim() || '';
-      if (text.length > 10) {
+      if (text.length > 20) {
         setSelectedText(text);
+      } else {
+        setSelectedText('');
       }
     };
 
@@ -212,8 +220,8 @@ export default function PDFViewer({
                 setScale(1);
               }}
               className={`inline-flex h-7 items-center justify-center border border-border px-2 text-xs transition-colors ${fitMode === 'fit'
-                  ? 'bg-background text-foreground'
-                  : 'bg-surface text-muted-foreground hover:bg-accent/15 hover:text-foreground'
+                ? 'bg-background text-foreground'
+                : 'bg-surface text-muted-foreground hover:bg-accent/15 hover:text-foreground'
                 }`}
             >
               Fit
@@ -242,8 +250,8 @@ export default function PDFViewer({
               <button
                 onClick={() => setSidebarOpen(!sidebarOpen)}
                 className={`inline-flex h-7 w-7 items-center justify-center border border-border transition-colors ${sidebarOpen
-                    ? 'bg-primary/10 text-primary border-primary/30'
-                    : 'bg-surface text-muted-foreground hover:bg-accent/15 hover:text-foreground'
+                  ? 'bg-primary/10 text-primary border-primary/30'
+                  : 'bg-surface text-muted-foreground hover:bg-accent/15 hover:text-foreground'
                   }`}
                 title={sidebarOpen ? 'Hide paper info' : 'Show paper info'}
               >

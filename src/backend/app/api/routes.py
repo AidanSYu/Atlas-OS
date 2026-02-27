@@ -1066,12 +1066,13 @@ async def get_context_suggestions(request: ContextRequest):
     if context_engine_service is None:
         raise HTTPException(status_code=503, detail="Context engine unavailable")
     try:
-        return await context_engine_service.get_context_suggestions(
+        suggestions = await context_engine_service.get_context_suggestions(
             project_id=request.project_id,
             selected_text=request.selected_text,
             current_doc_id=request.current_doc_id,
             current_page=request.current_page,
         )
+        return {"status": "success", "suggestions": suggestions}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting context suggestions: {str(e)}")
 

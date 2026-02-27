@@ -85,11 +85,16 @@ export function useContextEngine(projectId: string | null) {
     ) => {
         if (!projectId) return;
 
-        setLastPayload({
-            project_id: projectId,
-            selected_text: selectedText,
-            current_doc_id: docId,
-            current_page: page,
+        setLastPayload((prev) => {
+            if (prev && prev.current_doc_id !== docId) {
+                setSuggestions(null); // Clear previous doc's suggestions immediately
+            }
+            return {
+                project_id: projectId,
+                selected_text: selectedText,
+                current_doc_id: docId,
+                current_page: page,
+            };
         });
     }, [projectId]);
 

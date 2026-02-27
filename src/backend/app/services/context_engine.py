@@ -16,7 +16,7 @@ from app.core.config import settings
 from app.services.llm import LLMService
 from app.core.qdrant_store import get_qdrant_client
 from app.services.rerank import get_rerank_service
-from qdrant_client.models import Filter, FieldCondition, MatchValue
+from qdrant_client.models import Filter, FieldCondition, MatchValue, SearchParams
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +53,9 @@ class ContextEngineService:
         self.qdrant_client = get_qdrant_client()
         self.collection_name = settings.QDRANT_COLLECTION
         self.reranker = get_rerank_service()
+        # Cache: keyed by (doc_id, page_number) -> related passages result
+        self._related_cache: Dict[str, List[Dict[str, Any]]] = {}
+        self._concepts_cache: Dict[str, List[Dict[str, Any]]] = {}
         logger.info("ContextEngineService initialized")
 
     # ------------------------------------------------------------------
@@ -144,6 +147,7 @@ class ContextEngineService:
                 query=embedding,
                 query_filter=search_filter,
                 limit=limit * 2,  # Fetch extra for reranking
+                search_params=SearchParams(exact=True),  # Exact search for deterministic results
             ).points
         except Exception as e:
             logger.warning(f"Qdrant query failed (collection may be empty): {e}")
@@ -185,13 +189,13 @@ class ContextEngineService:
             is_reranked = "rerank_score" in p
             
             if is_reranked:
-                if score < 0.05:  # FlashRank can be very strict
+                if score < 0.01:  # FlashRank can be very strict
                     continue
             else:
-                if score < 0.4:  # Qdrant cosine similarity threshold
+                if score < 0.25:  # Qdrant cosine similarity threshold
                     continue
-                # Normalize Qdrant 0.4-0.9 range to roughly 0.0-1.0
-                score = max(0.0, min(1.0, (score - 0.4) * 2.0))
+                # Normalize Qdrant range to roughly 0.0-1.0
+                score = max(0.0, min(1.0, (score - 0.25) * 2.0))
                 p["score"] = score
                 
             filtered_passages.append(p)
@@ -228,16 +232,31 @@ class ContextEngineService:
             )
 
         elif current_doc_id and current_page:
+            # Use cache for page-level context to ensure deterministic results
+            cache_key = f"{current_doc_id}:{current_page}"
+            if cache_key in self._related_cache:
+                results["related_passages"] = self._related_cache[cache_key]
+                results["connected_concepts"] = self._concepts_cache.get(cache_key, [])
+                return results
+
             if not self._document_exists(current_doc_id):
                 return results
             page_text = await self._get_page_text(current_doc_id, current_page)
             if page_text:
-                results["related_passages"] = await self.get_related_passages(
+                related = await self.get_related_passages(
                     doc_id=current_doc_id,
                     text=page_text[:500],
                     project_id=project_id,
                     limit=3,
                 )
+                concepts = await self._find_connected_entities(
+                    page_text[:500], project_id
+                )
+                results["related_passages"] = related
+                results["connected_concepts"] = concepts
+                # Store in cache (simple dict; entries evicted on service restart)
+                self._related_cache[cache_key] = related
+                self._concepts_cache[cache_key] = concepts
 
         return results
 
@@ -285,11 +304,11 @@ class ContextEngineService:
         session = get_session()
         try:
             # Simple keyword matching: extract words > 3 chars and search nodes
-            words = set(
+            words = sorted(set(
                 w.lower()
                 for w in text.split()
                 if len(w) > 3 and w.isalpha()
-            )
+            ))
 
             if not words:
                 return []
