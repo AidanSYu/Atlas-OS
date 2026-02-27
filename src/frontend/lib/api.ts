@@ -187,6 +187,33 @@ export interface SwarmResponse {
   }>;
 }
 
+// Discovery OS types
+export interface DiscoveryCandidate {
+  smiles: string;
+  properties?: Record<string, any>;
+  toxicity?: Record<string, any>;
+}
+
+export interface DiscoveryResponse extends SwarmResponse {
+  candidates: DiscoveryCandidate[];
+}
+
+export interface ToolCallEvent {
+  tool: string;
+  input: Record<string, any>;
+}
+
+export interface ToolResultEvent {
+  tool: string;
+  output: Record<string, any>;
+}
+
+export interface SpectrumUploadResponse {
+  file_id: string;
+  filename: string;
+  file_path: string;
+}
+
 // Phase 4: Workspace Drafts
 export interface WorkspaceDraft {
   id: string;
@@ -874,6 +901,106 @@ export const api = {
                 data = JSON.parse(line.substring(6).trim());
               } catch (e) {
                 console.error('JSON parse error in stream:', e);
+              }
+            }
+          }
+
+          if (type && data) {
+            onEvent(type, data);
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  },
+
+  // ============================================================
+  // DISCOVERY OS (Phase 1: Deterministic Tool-Calling)
+  // ============================================================
+
+  async uploadSpectrum(file: File, projectId: string): Promise<SpectrumUploadResponse> {
+    const formData = new FormData();
+    formData.append('file', file);
+    const url = `${API_BASE_URL}/api/discovery/upload-spectrum?project_id=${encodeURIComponent(projectId)}`;
+    const response = await fetchWithTimeout(url, { method: 'POST', body: formData });
+    return handleResponse(response);
+  },
+
+  async runDiscovery(query: string, projectId: string, spectrumFilePath?: string): Promise<DiscoveryResponse> {
+    const body: Record<string, any> = { query, project_id: projectId };
+    if (spectrumFilePath) body.spectrum_file_path = spectrumFilePath;
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/api/discovery/run`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      },
+      SWARM_TIMEOUT
+    );
+    return handleResponse(response);
+  },
+
+  async streamDiscovery(
+    query: string,
+    projectId: string,
+    onEvent: (type: string, data: any) => void,
+    sessionId?: string,
+    signal?: AbortSignal,
+    spectrumFilePath?: string
+  ): Promise<void> {
+    const body: Record<string, any> = {
+      query,
+      project_id: projectId,
+      session_id: sessionId,
+    };
+    if (spectrumFilePath) body.spectrum_file_path = spectrumFilePath;
+
+    const response = await fetch(`${API_BASE_URL}/api/discovery/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Discovery streaming failed: ${response.statusText}`);
+    }
+
+    const reader = response.body?.getReader();
+    const decoder = new TextDecoder();
+
+    if (!reader) return;
+
+    let buffer = '';
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        buffer += chunk;
+
+        const events = buffer.split('\n\n');
+        buffer = events.pop() || '';
+
+        for (const eventBlock of events) {
+          if (!eventBlock.trim()) continue;
+
+          let type = '';
+          let data = null;
+
+          const lines = eventBlock.split('\n');
+          for (const line of lines) {
+            if (line.startsWith('event: ')) {
+              type = line.substring(7).trim();
+            } else if (line.startsWith('data: ')) {
+              try {
+                data = JSON.parse(line.substring(6).trim());
+              } catch (e) {
+                console.error('JSON parse error in discovery stream:', e);
               }
             }
           }

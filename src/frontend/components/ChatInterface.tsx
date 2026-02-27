@@ -6,8 +6,8 @@ import DualAgentChat from '@/components/DualAgentChat';
 interface ChatInterfaceProps {
   onCitationClick: (filename: string, page: number, docId?: string) => void;
   projectId?: string;
-  chatMode: 'librarian' | 'cortex' | 'moe';
-  onChatModeChange: (mode: 'librarian' | 'cortex' | 'moe') => void;
+  chatMode: 'librarian' | 'cortex' | 'moe' | 'discovery';
+  onChatModeChange: (mode: 'librarian' | 'cortex' | 'moe' | 'discovery') => void;
 }
 
 export default function ChatInterface({

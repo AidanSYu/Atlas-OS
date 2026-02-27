@@ -1,7 +1,8 @@
 /**
- * Persistent Dual-Agent Chat Store
- * 
- * Manages separate chat histories and input states for Librarian (green) and Cortex (purple) agents.
+ * Persistent Multi-Agent Chat Store
+ *
+ * Manages separate chat histories and input states for Librarian (green),
+ * Cortex (purple), MoE (blue), and Discovery (orange) agents.
  * History is cleared when a new project is started.
  */
 import { create } from 'zustand';
@@ -35,6 +36,11 @@ export interface ChatMessage {
       severity: 'HIGH' | 'LOW';
       resolution?: string;
     }>;
+    candidates?: Array<{
+      smiles: string;
+      properties?: Record<string, any>;
+      toxicity?: Record<string, any>;
+    }>;
   };
   librarianMetadata?: {
     reasoning?: string;
@@ -65,6 +71,11 @@ interface ChatState {
   moeInput: string;
   moeSessionId: string;
 
+  // Discovery (orange) chat state
+  discoveryMessages: ChatMessage[];
+  discoveryInput: string;
+  discoverySessionId: string;
+
   // Current active project (for clearing on project change)
   activeProjectId: string | null;
 
@@ -78,12 +89,15 @@ interface ChatState {
   addLibrarianMessage: (message: Omit<ChatMessage, 'id' | 'timestamp'>) => void;
   addCortexMessage: (message: Omit<ChatMessage, 'id' | 'timestamp'>) => void;
   addMoeMessage: (message: Omit<ChatMessage, 'id' | 'timestamp'>) => void;
+  addDiscoveryMessage: (message: Omit<ChatMessage, 'id' | 'timestamp'>) => void;
   setLibrarianInput: (input: string) => void;
   setCortexInput: (input: string) => void;
   setMoeInput: (input: string) => void;
+  setDiscoveryInput: (input: string) => void;
   clearLibrarianChat: () => void;
   clearCortexChat: () => void;
   clearMoeChat: () => void;
+  clearDiscoveryChat: () => void;
   clearAllChats: () => void;
   setActiveProject: (projectId: string | null) => void;
   setPendingQuestion: (question: string | null) => void;
@@ -114,6 +128,13 @@ const MOE_WELCOME: ChatMessage = {
   timestamp: Date.now(),
 };
 
+const DISCOVERY_WELCOME: ChatMessage = {
+  id: 'discovery-welcome',
+  role: 'assistant',
+  content: "I'm the **Discovery OS**. I use deterministic chemistry tools to predict molecular properties, check toxicity, and search your literature. Ask me about any molecule or scientific computation -- I'll call the right tools and show you verifiable results.",
+  timestamp: Date.now(),
+};
+
 export const useChatStore = create<ChatState>()(
   persist(
     (set, get) => ({
@@ -127,6 +148,9 @@ export const useChatStore = create<ChatState>()(
       moeMessages: [MOE_WELCOME],
       moeInput: '',
       moeSessionId: crypto.randomUUID(),
+      discoveryMessages: [DISCOVERY_WELCOME],
+      discoveryInput: '',
+      discoverySessionId: crypto.randomUUID(),
       activeProjectId: null,
       pendingQuestion: null,
       pendingHypotheses: null,
@@ -155,9 +179,18 @@ export const useChatStore = create<ChatState>()(
           ],
         })),
 
+      addDiscoveryMessage: (message) =>
+        set((state) => ({
+          discoveryMessages: [
+            ...state.discoveryMessages,
+            { ...message, id: generateId(), timestamp: Date.now() },
+          ],
+        })),
+
       setLibrarianInput: (input) => set({ librarianInput: input }),
       setCortexInput: (input) => set({ cortexInput: input }),
       setMoeInput: (input) => set({ moeInput: input }),
+      setDiscoveryInput: (input) => set({ discoveryInput: input }),
 
       clearLibrarianChat: () =>
         set({ librarianMessages: [LIBRARIAN_WELCOME], librarianInput: '' }),
@@ -168,6 +201,9 @@ export const useChatStore = create<ChatState>()(
       clearMoeChat: () =>
         set({ moeMessages: [MOE_WELCOME], moeInput: '' }),
 
+      clearDiscoveryChat: () =>
+        set({ discoveryMessages: [DISCOVERY_WELCOME], discoveryInput: '' }),
+
       clearAllChats: () =>
         set({
           librarianMessages: [LIBRARIAN_WELCOME],
@@ -176,6 +212,8 @@ export const useChatStore = create<ChatState>()(
           cortexInput: '',
           moeMessages: [MOE_WELCOME],
           moeInput: '',
+          discoveryMessages: [DISCOVERY_WELCOME],
+          discoveryInput: '',
         }),
 
       setActiveProject: (projectId) => {
@@ -190,6 +228,8 @@ export const useChatStore = create<ChatState>()(
             cortexInput: '',
             moeMessages: [MOE_WELCOME],
             moeInput: '',
+            discoveryMessages: [DISCOVERY_WELCOME],
+            discoveryInput: '',
             pendingQuestion: null,
           });
         }
@@ -202,7 +242,7 @@ export const useChatStore = create<ChatState>()(
     }),
     {
       name: 'atlas-chat-storage',
-      version: 2,
+      version: 3,
       storage: createJSONStorage(() => localStorage),
       // Only persist messages and inputs, not the project ID (we check that on load)
       partialize: (state) => ({
@@ -215,6 +255,9 @@ export const useChatStore = create<ChatState>()(
         moeMessages: state.moeMessages,
         moeInput: state.moeInput,
         moeSessionId: state.moeSessionId,
+        discoveryMessages: state.discoveryMessages,
+        discoveryInput: state.discoveryInput,
+        discoverySessionId: state.discoverySessionId,
         activeProjectId: state.activeProjectId,
       }),
     }

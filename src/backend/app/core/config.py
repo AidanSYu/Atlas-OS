@@ -119,6 +119,11 @@ class Settings(BaseSettings):
     # Atlas 3.0: Workspace Configuration (Phase 4)
     DRAFTS_DIR: str = Field(default_factory=lambda: str(Path(__file__).resolve().parent.parent.parent / "data" / "drafts"))
 
+    # Discovery OS Configuration (Phase 1)
+    MAX_TOOL_ITERATIONS: int = 8           # Max ReAct loop iterations before forced final_answer
+    ENABLE_DISCOVERY_MODE: bool = True     # Enable the Discovery OS pipeline
+    DISCOVERY_DEFAULT_PHASE: str = "hit_identification"  # Default workflow phase
+
 
 settings = Settings()
 

@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import LibrarySidebar from '@/components/LibrarySidebar';
 import PDFViewer from '@/components/PDFViewer';
+import TextViewer from '@/components/TextViewer';
 import KnowledgeGraph from '@/components/KnowledgeGraph';
 import DualAgentChat from '@/components/DualAgentChat';
 import EditorPane from '@/components/EditorPane';
@@ -67,7 +68,7 @@ export default function ProjectWorkspacePage() {
   const [selectedFilename, setSelectedFilename] = useState<string | null>(null);
   const [pdfPage, setPdfPage] = useState(1);
   const [activeView, setActiveView] = useState<MainView>('document');
-  const [chatMode, setChatMode] = useState<'librarian' | 'cortex' | 'moe'>('librarian');
+  const [chatMode, setChatMode] = useState<'librarian' | 'cortex' | 'moe' | 'discovery'>('librarian');
 
   const [contextCollapsed, setContextCollapsed] = useState(false);
   const [modelRegistry, setModelRegistry] = useState<ModelRegistryResponse | null>(null);
@@ -564,16 +565,26 @@ export default function ProjectWorkspacePage() {
               {/* Document View */}
               {activeView === 'document' && (
                 selectedDocId && selectedFilename ? (
-                  <PDFViewer
-                    fileUrl={api.getFileUrl(selectedDocId)}
-                    filename={selectedFilename}
-                    docId={selectedDocId}
-                    projectId={currentProject.id}
-                    initialPage={pdfPage}
-                    onAskAboutPage={handleAskAboutPage}
-                    onRelatedPassageClick={handleCitationClick}
-                    onContextChange={updateContext}
-                  />
+                  /\.(txt|text|md|csv|log|json|xml)$/i.test(selectedFilename) ? (
+                    <TextViewer
+                      fileUrl={api.getFileUrl(selectedDocId)}
+                      filename={selectedFilename}
+                      docId={selectedDocId}
+                      projectId={currentProject.id}
+                      onContextChange={updateContext}
+                    />
+                  ) : (
+                    <PDFViewer
+                      fileUrl={api.getFileUrl(selectedDocId)}
+                      filename={selectedFilename}
+                      docId={selectedDocId}
+                      projectId={currentProject.id}
+                      initialPage={pdfPage}
+                      onAskAboutPage={handleAskAboutPage}
+                      onRelatedPassageClick={handleCitationClick}
+                      onContextChange={updateContext}
+                    />
+                  )
                 ) : (
                   <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
                     <div className="rounded-2xl bg-primary/5 p-6 mb-4">

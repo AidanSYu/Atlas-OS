@@ -5,7 +5,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useChatStore, ChatMessage } from '@/stores/chatStore';
-import { api, Citation, SwarmResponse, GroundingEvent } from '@/lib/api';
+import { api, Citation, SwarmResponse, DiscoveryResponse, GroundingEvent, SpectrumUploadResponse } from '@/lib/api';
 import {
   Send,
   Bot,
@@ -32,12 +32,16 @@ import {
   Network,
   Lightbulb,
   PenTool,
+  Beaker,
+  Paperclip,
+  X,
 } from 'lucide-react';
 import CitationCard from './generative/CitationCard';
 import { ClaimBadge, ClaimDot } from './generative/ClaimBadge';
 import { ComparisonTable } from './generative/ComparisonTable';
 import { MetricCard } from './generative/MetricCard';
 import { AgentWorkbench } from './AgentWorkbench';
+import { DiscoveryWorkbench } from './DiscoveryWorkbench';
 import { spring, animations } from '@/lib/design-system/motion';
 
 type GroundingStatus = 'GROUNDED' | 'SUPPORTED' | 'UNVERIFIED' | 'INFERRED';
@@ -45,8 +49,8 @@ type GroundingStatus = 'GROUNDED' | 'SUPPORTED' | 'UNVERIFIED' | 'INFERRED';
 interface DualAgentChatProps {
   onCitationClick: (filename: string, page: number, docId?: string) => void;
   projectId?: string;
-  chatMode: 'librarian' | 'cortex' | 'moe';
-  onChatModeChange: (mode: 'librarian' | 'cortex' | 'moe') => void;
+  chatMode: 'librarian' | 'cortex' | 'moe' | 'discovery';
+  onChatModeChange: (mode: 'librarian' | 'cortex' | 'moe' | 'discovery') => void;
 }
 
 interface GraphData {
@@ -63,6 +67,9 @@ interface StreamProgress {
   evidenceFound: number;
   routing?: { brain: string; intent: string };
   graphData?: GraphData;
+  activeTool?: { name: string; input: any };
+  toolResults?: { tool: string; output: any }[];
+  candidates?: any[];
 }
 
 function MarkdownContent({ content }: { content: string }) {
@@ -219,15 +226,21 @@ export default function DualAgentChat({
     addLibrarianMessage,
     addCortexMessage,
     addMoeMessage,
+    addDiscoveryMessage,
     setLibrarianInput,
     setCortexInput,
     setMoeInput,
+    setDiscoveryInput,
     clearLibrarianChat,
     clearCortexChat,
     clearMoeChat,
+    clearDiscoveryChat,
     setActiveProject,
     setPendingQuestion,
     setPendingHypotheses,
+    discoveryMessages,
+    discoveryInput,
+    discoverySessionId,
   } = useChatStore();
 
   useEffect(() => {
@@ -236,14 +249,14 @@ export default function DualAgentChat({
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [librarianMessages, cortexMessages, moeMessages, chatMode]);
+  }, [librarianMessages, cortexMessages, moeMessages, discoveryMessages, chatMode]);
 
   useEffect(() => {
     if (inputRef.current) {
       inputRef.current.style.height = 'auto';
       inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 120)}px`;
     }
-  }, [chatMode === 'librarian' ? librarianInput : chatMode === 'cortex' ? cortexInput : moeInput]);
+  }, [chatMode === 'librarian' ? librarianInput : chatMode === 'cortex' ? cortexInput : chatMode === 'moe' ? moeInput : discoveryInput]);
 
   const [isLoading, setIsLoading] = useState(false);
   const [streamProgress, setStreamProgress] = useState<StreamProgress | null>(null);
@@ -252,11 +265,14 @@ export default function DualAgentChat({
   const [streamingText, setStreamingText] = useState<string>('');
   const [startTime, setStartTime] = useState<number | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [spectrumFile, setSpectrumFile] = useState<SpectrumUploadResponse | null>(null);
+  const [isUploadingSpectrum, setIsUploadingSpectrum] = useState(false);
+  const spectrumInputRef = useRef<HTMLInputElement>(null);
 
-  const currentMessages = chatMode === 'librarian' ? librarianMessages : chatMode === 'cortex' ? cortexMessages : moeMessages;
-  const currentInput = chatMode === 'librarian' ? librarianInput : chatMode === 'cortex' ? cortexInput : moeInput;
-  const setCurrentInput = chatMode === 'librarian' ? setLibrarianInput : chatMode === 'cortex' ? setCortexInput : setMoeInput;
-  const addMessage = chatMode === 'librarian' ? addLibrarianMessage : chatMode === 'cortex' ? addCortexMessage : addMoeMessage;
+  const currentMessages = chatMode === 'librarian' ? librarianMessages : chatMode === 'cortex' ? cortexMessages : chatMode === 'moe' ? moeMessages : discoveryMessages;
+  const currentInput = chatMode === 'librarian' ? librarianInput : chatMode === 'cortex' ? cortexInput : chatMode === 'moe' ? moeInput : discoveryInput;
+  const setCurrentInput = chatMode === 'librarian' ? setLibrarianInput : chatMode === 'cortex' ? setCortexInput : chatMode === 'moe' ? setMoeInput : setDiscoveryInput;
+  const addMessage = chatMode === 'librarian' ? addLibrarianMessage : chatMode === 'cortex' ? addCortexMessage : chatMode === 'moe' ? addMoeMessage : addDiscoveryMessage;
 
   // Consume pending question from other views (e.g. "Ask about this page")
   useEffect(() => {
@@ -635,6 +651,178 @@ export default function DualAgentChat({
             });
           }
         }
+      } else if (chatMode === 'discovery') {
+        // Discovery OS: ReAct tool-calling loop with deterministic plugins
+        setStreamProgress({
+          currentNode: 'router',
+          message: 'Routing to Discovery OS...',
+          thinkingSteps: [],
+          evidenceFound: 0,
+          toolResults: [],
+          candidates: [],
+        });
+
+        try {
+          const abortController = new AbortController();
+          abortRef.current = () => abortController.abort();
+
+          const result = await new Promise<DiscoveryResponse>((resolve, reject) => {
+            let finalResult: DiscoveryResponse | null = null;
+
+            const handleEvent = (type: string, data: any) => {
+              switch (type) {
+                case 'routing':
+                  setStreamProgress((prev) => ({
+                    ...(prev || { currentNode: 'router', message: 'Routing...', thinkingSteps: [], evidenceFound: 0 }),
+                    routing: { brain: data.brain, intent: data.intent },
+                    message: `Discovery OS initialized`,
+                    thinkingSteps: prev ? [...prev.thinkingSteps, `Routed to ${data.brain}`] : [`Routed to ${data.brain}`],
+                  }));
+                  break;
+                case 'progress':
+                  setStreamProgress((prev) => prev ? {
+                    ...prev,
+                    currentNode: data.node,
+                    message: data.message,
+                  } : null);
+                  break;
+                case 'thinking':
+                  setStreamProgress((prev) => prev ? {
+                    ...prev,
+                    thinkingSteps: [...prev.thinkingSteps, data.content],
+                  } : null);
+                  break;
+                case 'tool_call':
+                  setStreamProgress((prev) => prev ? {
+                    ...prev,
+                    thinkingSteps: [...prev.thinkingSteps, `Calling **${data.tool}**(${JSON.stringify(data.input).slice(0, 80)}...)`],
+                    message: `Executing ${data.tool}...`,
+                    activeTool: { name: data.tool, input: data.input },
+                    currentNode: 'execute',
+                  } : null);
+                  break;
+                case 'tool_result':
+                  setStreamProgress((prev) => {
+                    if (!prev) return null;
+                    const output = data.output;
+                    let summary = '';
+                    let updatedCandidates = [...(prev.candidates || [])];
+
+                    if (data.tool === 'predict_properties' && output.valid) {
+                      summary = `MW: ${output.MolWt}, LogP: ${output.LogP}, QED: ${output.QED}`;
+                      const existingIdx = updatedCandidates.findIndex(c => c.smiles === output.smiles);
+                      if (existingIdx >= 0) {
+                        updatedCandidates[existingIdx] = { ...updatedCandidates[existingIdx], properties: output };
+                      } else {
+                        updatedCandidates.push({ smiles: output.smiles, properties: output });
+                      }
+                    } else if (data.tool === 'check_toxicity' && output.valid) {
+                      summary = output.clean ? 'Clean (no alerts)' : `${output.alert_count} alert(s)`;
+                      const existingIdx = updatedCandidates.findIndex(c => c.smiles === output.smiles);
+                      if (existingIdx >= 0) {
+                        updatedCandidates[existingIdx] = { ...updatedCandidates[existingIdx], toxicity: output };
+                      } else {
+                        updatedCandidates.push({ smiles: output.smiles, toxicity: output });
+                      }
+                    } else if (data.tool === 'verify_spectrum' && output.valid) {
+                      summary = `Match: ${output.match_score != null ? (output.match_score * 100).toFixed(0) + '%' : 'N/A'}, ${output.peak_count} peaks observed`;
+                    } else if (data.tool === 'search_literature') {
+                      summary = `Found ${output.total_results} passages`;
+                    } else {
+                      summary = JSON.stringify(output).slice(0, 100);
+                    }
+                    return {
+                      ...prev,
+                      thinkingSteps: [...prev.thinkingSteps, `Result: ${summary}`],
+                      message: 'Reasoning about results...',
+                      currentNode: 'think',
+                      activeTool: undefined,
+                      toolResults: [...(prev.toolResults || []), { tool: data.tool, output }],
+                      candidates: updatedCandidates,
+                    };
+                  });
+                  break;
+                case 'evidence':
+                  setStreamProgress((prev) => prev ? {
+                    ...prev,
+                    evidenceFound: prev.evidenceFound + (data.count || 1),
+                  } : null);
+                  break;
+                case 'complete':
+                  setStreamingText('');
+                  finalResult = data as DiscoveryResponse;
+                  resolve(finalResult);
+                  break;
+                case 'cancelled':
+                  resolve({
+                    hypothesis: 'Generation was stopped by user.',
+                    evidence: [],
+                    reasoning_trace: ['Generation cancelled by user.'],
+                    brain_used: 'discovery',
+                    status: 'cancelled',
+                    candidates: [],
+                  } as any);
+                  break;
+                case 'error':
+                  reject(new Error(data.message));
+                  break;
+              }
+            };
+
+            api.streamDiscovery(userContent, projectId, handleEvent, discoverySessionId, abortController.signal, spectrumFile?.file_path)
+              .catch(reject);
+
+            setTimeout(() => { if (!finalResult) reject(new Error('Stream timeout')); }, 300000);
+          });
+
+          setSpectrumFile(null);
+
+          if (result.status !== 'cancelled') {
+            addMessage({
+              role: 'assistant',
+              content: result.hypothesis || 'No analysis generated.',
+              citations: result.evidence?.map((e: any) => ({
+                source: e.source,
+                page: e.page,
+                relevance: e.relevance,
+                text: e.excerpt,
+              })),
+              brainActivity: {
+                brain: result.brain_used,
+                trace: result.reasoning_trace || [],
+                evidence: result.evidence || [],
+                confidenceScore: result.confidence_score,
+                iterations: result.iterations,
+                candidates: result.candidates,
+              },
+            });
+          }
+        } catch (error: any) {
+          if (error?.name === 'AbortError' || error?.message?.includes('abort')) {
+            return;
+          }
+          // Fallback to non-streaming
+          setStreamProgress({
+            currentNode: 'fallback',
+            message: 'Processing (non-streaming)...',
+            thinkingSteps: [],
+            evidenceFound: 0,
+          });
+
+          const result = await api.runDiscovery(userContent, projectId);
+          addMessage({
+            role: 'assistant',
+            content: result.hypothesis || 'No analysis generated.',
+            brainActivity: {
+              brain: result.brain_used,
+              trace: result.reasoning_trace || [],
+              evidence: result.evidence || [],
+              confidenceScore: result.confidence_score,
+              iterations: result.iterations,
+              candidates: result.candidates,
+            },
+          });
+        }
       } else {
         const abortController = new AbortController();
         abortRef.current = () => abortController.abort();
@@ -673,7 +861,7 @@ export default function DualAgentChat({
       setStreamProgress(null);
       abortRef.current = null;
     }
-  }, [currentInput, isLoading, projectId, chatMode, addMessage, setCurrentInput, pendingHypotheses, setPendingHypotheses, moeSessionId]);
+  }, [currentInput, isLoading, projectId, chatMode, addMessage, setCurrentInput, pendingHypotheses, setPendingHypotheses, moeSessionId, discoverySessionId, spectrumFile]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -681,6 +869,26 @@ export default function DualAgentChat({
       handleSubmit();
     }
   };
+
+  const handleSpectrumUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !projectId) return;
+    if (!file.name.toLowerCase().endsWith('.jdx')) {
+      alert('Only .jdx (JCAMP-DX) NMR files are supported.');
+      return;
+    }
+    setIsUploadingSpectrum(true);
+    try {
+      const result = await api.uploadSpectrum(file, projectId);
+      setSpectrumFile(result);
+    } catch (err: any) {
+      console.error('Spectrum upload failed:', err);
+      alert(`Spectrum upload failed: ${err.message}`);
+    } finally {
+      setIsUploadingSpectrum(false);
+      if (spectrumInputRef.current) spectrumInputRef.current.value = '';
+    }
+  }, [projectId]);
 
   const handleHypothesisSelect = (hypothesis: string) => {
     handleSubmit(hypothesis);
@@ -692,6 +900,7 @@ export default function DualAgentChat({
       clearMoeChat();
       setPendingHypotheses(null);
     }
+    else if (chatMode === 'discovery') clearDiscoveryChat();
     else clearLibrarianChat();
   };
 
@@ -775,6 +984,16 @@ export default function DualAgentChat({
               <Network className="h-3.5 w-3.5" />
               MoE
             </button>
+            <button
+              onClick={() => onChatModeChange('discovery')}
+              className={`flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-medium transition-all ${chatMode === 'discovery'
+                ? 'bg-orange-500/15 text-orange-500 shadow-sm border border-orange-500/20'
+                : 'text-muted-foreground hover:text-foreground border border-transparent'
+                }`}
+            >
+              <Beaker className="h-3.5 w-3.5" />
+              Discovery
+            </button>
           </div>
 
           <button
@@ -793,22 +1012,26 @@ export default function DualAgentChat({
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 space-y-5">
             {currentMessages.length === 0 && !isLoading && (
               <div className="flex flex-col items-center justify-center h-full text-center px-8">
-                <div className={`rounded-2xl p-6 mb-6 ${chatMode === 'librarian' ? 'bg-gradient-to-br from-primary/20 to-primary/5' : chatMode === 'cortex' ? 'bg-gradient-to-br from-accent/20 to-accent/5' : 'bg-gradient-to-br from-blue-500/20 to-blue-500/5'}`}>
+                <div className={`rounded-2xl p-6 mb-6 ${chatMode === 'librarian' ? 'bg-gradient-to-br from-primary/20 to-primary/5' : chatMode === 'cortex' ? 'bg-gradient-to-br from-accent/20 to-accent/5' : chatMode === 'moe' ? 'bg-gradient-to-br from-blue-500/20 to-blue-500/5' : 'bg-gradient-to-br from-orange-500/20 to-orange-500/5'}`}>
                   {chatMode === 'librarian' ? (
                     <BookOpen className="h-12 w-12 text-primary" />
                   ) : chatMode === 'cortex' ? (
                     <Brain className="h-12 w-12 text-accent" />
-                  ) : (
+                  ) : chatMode === 'moe' ? (
                     <Network className="h-12 w-12 text-blue-500" />
+                  ) : (
+                    <Beaker className="h-12 w-12 text-orange-500" />
                   )}
                 </div>
                 <h3 className="font-serif text-lg font-semibold text-foreground mb-2">
-                  {chatMode === 'librarian' ? 'Document Librarian' : chatMode === 'cortex' ? 'Deep Research Assistant' : 'Mixture of Experts (MoE)'}
+                  {chatMode === 'librarian' ? 'Document Librarian' : chatMode === 'cortex' ? 'Deep Research Assistant' : chatMode === 'moe' ? 'Mixture of Experts (MoE)' : 'Discovery OS'}
                 </h3>
                 <p className="text-sm text-muted-foreground max-w-md leading-relaxed mb-8">
                   {chatMode === 'librarian'
                     ? 'Ask questions and get answers backed by your documents with full citations and reasoning traces.'
-                    : chatMode === 'cortex' ? 'Complex queries get deep multi-agent analysis. Finds connections, generates hypotheses, cross-checks findings with reflection loops.' : 'Orchestrates a team of highly specialized expert agents (Hypothesis, Retrieval, Writer, Critic). Highly grounded and fact-checked.'}
+                    : chatMode === 'cortex' ? 'Complex queries get deep multi-agent analysis. Finds connections, generates hypotheses, cross-checks findings with reflection loops.'
+                      : chatMode === 'moe' ? 'Orchestrates a team of highly specialized expert agents (Hypothesis, Retrieval, Writer, Critic). Highly grounded and fact-checked.'
+                        : 'Deterministic chemistry tools for molecular property prediction, toxicity screening, and literature search. Every result is computed, not generated.'}
                 </p>
                 <div className="grid gap-2 sm:grid-cols-2 max-w-xl">
                   {(chatMode === 'librarian'
@@ -823,12 +1046,18 @@ export default function DualAgentChat({
                       'Identify contradictions in findings',
                       'Summarize key contributions',
                       'Find connections between concepts'
-                    ] : [
-                      'Synthesize the main barriers to adoption',
-                      'Propose a novel hypothesis combining these domains',
-                      'Conduct a grounded audit of recent findings',
-                      'Write a comprehensive overview of the field'
                     ]
+                      : chatMode === 'moe' ? [
+                        'Synthesize the main barriers to adoption',
+                        'Propose a novel hypothesis combining these domains',
+                        'Conduct a grounded audit of recent findings',
+                        'Write a comprehensive overview of the field'
+                      ] : [
+                        'What are the properties of aspirin?',
+                        'Check toxicity of caffeine (CN1C=NC2=C1C(=O)N(C(=O)N2C)C)',
+                        'Predict the LogP of ibuprofen',
+                        'Search my papers for molecular targets'
+                      ]
                   ).map((suggestion) => (
                     <button
                       key={suggestion}
@@ -1167,7 +1396,45 @@ export default function DualAgentChat({
 
           {/* Input */}
           <div className="shrink-0 border-t border-border bg-card p-3">
+            {chatMode === 'discovery' && spectrumFile && (
+              <div className="mx-auto max-w-3xl mb-2">
+                <div className="inline-flex items-center gap-2 rounded-full bg-orange-500/10 border border-orange-500/20 px-3 py-1.5 text-xs text-orange-500">
+                  <Beaker className="h-3 w-3" />
+                  <span className="font-medium">{spectrumFile.filename}</span>
+                  <button
+                    onClick={() => setSpectrumFile(null)}
+                    className="ml-1 rounded-full p-0.5 hover:bg-orange-500/20 transition-colors"
+                    title="Remove spectrum file"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              </div>
+            )}
             <div className="relative mx-auto max-w-3xl">
+              {chatMode === 'discovery' && (
+                <>
+                  <input
+                    ref={spectrumInputRef}
+                    type="file"
+                    accept=".jdx"
+                    onChange={handleSpectrumUpload}
+                    className="hidden"
+                  />
+                  <button
+                    onClick={() => spectrumInputRef.current?.click()}
+                    disabled={isLoading || isUploadingSpectrum || !projectId}
+                    className="absolute left-2 top-1/2 -translate-y-1/2 rounded-lg p-2 text-muted-foreground hover:text-orange-500 hover:bg-orange-500/10 transition-all disabled:opacity-40"
+                    title="Attach .jdx spectrum file"
+                  >
+                    {isUploadingSpectrum ? (
+                      <Loader2 className="h-4 w-4 animate-spin text-orange-500" />
+                    ) : (
+                      <Paperclip className="h-4 w-4" />
+                    )}
+                  </button>
+                </>
+              )}
               <textarea
                 ref={inputRef}
                 value={currentInput}
@@ -1178,9 +1445,13 @@ export default function DualAgentChat({
                     ? 'Ask a question about the documents...'
                     : chatMode === 'cortex'
                       ? 'Ask a complex research question...'
-                      : 'Ask the MoE team to research and synthesize...'
+                      : chatMode === 'moe'
+                        ? 'Ask the MoE team to research and synthesize...'
+                        : spectrumFile
+                          ? 'Verify this spectrum against a molecule...'
+                          : 'Ask about molecular properties, toxicity, or chemistry...'
                 }
-                className="w-full resize-none border-0 bg-transparent py-4 pl-4 pr-12 text-sm text-foreground outline-none placeholder:text-muted-foreground"
+                className={`w-full resize-none border-0 bg-transparent py-4 pr-12 text-sm text-foreground outline-none placeholder:text-muted-foreground ${chatMode === 'discovery' ? 'pl-12' : 'pl-4'}`}
                 rows={1}
                 disabled={isLoading || !projectId}
               />
@@ -1225,6 +1496,15 @@ export default function DualAgentChat({
               streamProgress={streamProgress as any}
               streamingText={streamingText}
               isLoading={isLoading}
+            />
+          </div>
+        )}
+        {chatMode === 'discovery' && (
+          <div className="w-[500px] shrink-0 border-l border-border bg-card/50">
+            <DiscoveryWorkbench
+              streamProgress={streamProgress as any}
+              isLoading={isLoading}
+              finalCandidates={discoveryMessages[discoveryMessages.length - 1]?.brainActivity?.candidates}
             />
           </div>
         )}

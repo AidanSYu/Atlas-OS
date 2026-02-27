@@ -798,32 +798,6 @@ async def stream_swarm(body: SwarmStreamRequest, request: Request):
         },
     )
 
-# ============================================================
-# CONTEXT ENGINE
-# ============================================================
-
-@router.post("/api/context")
-async def get_context_suggestions(request: ContextRequest):
-    """Proactively generate context suggestions based on user reading state."""
-    ensure_services()
-    if context_engine_service is None:
-        raise HTTPException(status_code=503, detail="Context engine service unavailable")
-
-    try:
-        # Pass the context state to the engine
-        suggestions = await context_engine_service.get_context_suggestions(
-            project_id=request.project_id,
-            selected_text=request.selected_text,
-            current_doc_id=request.current_doc_id,
-            current_page=request.current_page
-        )
-        return {"status": "success", "suggestions": suggestions}
-    except Exception as e:
-        logger.error(f"Context engine error: {e}")
-        # Return empty rather than failing hard, as this is a background feature
-        return {"status": "error", "suggestions": []}
-
-
 @router.post("/api/swarm/run", response_model=SwarmResponse)
 async def run_swarm(request: SwarmRequest):
     """Run the Two-Brain Swarm on a query within a project.
@@ -996,6 +970,165 @@ async def stream_moe_hypotheses(body: MoERequest, request: Request):
             "X-Accel-Buffering": "no",
         },
     )
+
+# ============================================================
+# DISCOVERY OS (Phase 1: Deterministic Tool-Calling)
+# ============================================================
+
+class DiscoveryRequest(BaseModel):
+    project_id: str
+    query: str
+    session_id: Optional[str] = None
+    spectrum_file_path: Optional[str] = None
+
+
+class DiscoveryCandidateModel(BaseModel):
+    smiles: str
+    properties: Optional[dict] = None
+    toxicity: Optional[dict] = None
+
+
+class DiscoveryResponse(BaseModel):
+    brain_used: str = "discovery"
+    hypothesis: str
+    evidence: List[dict] = []
+    reasoning_trace: List[str] = []
+    status: str = "completed"
+    confidence_score: Optional[float] = None
+    candidates: List[DiscoveryCandidateModel] = []
+    iterations: int = 0
+    session_id: Optional[str] = None
+
+
+@router.post("/api/discovery/run", response_model=DiscoveryResponse)
+async def run_discovery(request: DiscoveryRequest):
+    """Discovery OS: Run the ReAct tool-calling loop on a scientific query.
+
+    The Discovery pipeline uses deterministic plugins (RDKit, SMARTS) for
+    molecular property prediction and toxicity checking, bridged with the
+    existing RAG pipeline for literature search.
+    """
+    ensure_services()
+    if chat_service is None:
+        raise HTTPException(status_code=503, detail="Services not initialized. Check backend logs.")
+    try:
+        from app.services.agents.discovery_graph import run_discovery_query
+
+        result = await run_discovery_query(
+            query=request.query,
+            project_id=request.project_id,
+            llm_service=chat_service.retrieval_service.llm_service,
+            retrieval_service=chat_service.retrieval_service,
+            spectrum_file_path=request.spectrum_file_path,
+        )
+        return DiscoveryResponse(**result)
+    except Exception as e:
+        logger.exception("Discovery execution failed")
+        raise HTTPException(status_code=500, detail=f"Discovery error: {str(e)}")
+
+
+@router.post("/api/discovery/stream")
+async def stream_discovery(body: DiscoveryRequest, request: Request):
+    """Discovery OS: Stream ReAct execution via Server-Sent Events.
+
+    Event types:
+      - routing:     {"brain": "discovery", "intent": "DISCOVERY"}
+      - progress:    {"node": "think"|"execute", "message": "..."}
+      - thinking:    {"content": "Thought: ..."}
+      - tool_call:   {"tool": "predict_properties", "input": {...}}
+      - tool_result: {"tool": "predict_properties", "output": {...}}
+      - evidence:    {"items": [...], "count": N}
+      - complete:    {hypothesis, evidence, candidates, reasoning_trace, ...}
+      - cancelled:   {"message": "Generation stopped by user"}
+      - error:       {"message": "..."}
+    """
+    ensure_services()
+    if chat_service is None:
+        raise HTTPException(status_code=503, detail="Services not initialized. Check backend logs.")
+
+    async def event_generator():
+        cancel_event = asyncio.Event()
+        monitor_task = asyncio.create_task(monitor_disconnect(request, cancel_event))
+        try:
+            from app.services.agents.discovery_graph import run_discovery_query_streaming
+
+            async for event_type, event_data in run_discovery_query_streaming(
+                query=body.query,
+                project_id=body.project_id,
+                session_id=body.session_id,
+                llm_service=chat_service.retrieval_service.llm_service,
+                retrieval_service=chat_service.retrieval_service,
+                cancel_event=cancel_event,
+                spectrum_file_path=body.spectrum_file_path,
+            ):
+                if cancel_event.is_set():
+                    yield f"event: cancelled\ndata: {json.dumps({'message': 'Generation stopped by user'})}\n\n"
+                    break
+                yield f"event: {event_type}\ndata: {json.dumps(event_data)}\n\n"
+        except Exception as e:
+            logger.error(f"Discovery streaming error: {e}", exc_info=True)
+            yield f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
+        finally:
+            cancel_event.set()
+            monitor_task.cancel()
+            try:
+                await monitor_task
+            except asyncio.CancelledError:
+                pass
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# ============================================================
+# DISCOVERY OS: Spectrum Upload (Phase 3)
+# ============================================================
+
+@router.post("/api/discovery/upload-spectrum")
+async def upload_spectrum(
+    file: UploadFile = File(...),
+    project_id: str = Query(...),
+):
+    """Upload a .jdx (JCAMP-DX) NMR spectrum file for verification.
+
+    Unlike /ingest, this endpoint stores the raw .jdx file without text
+    extraction, chunking, or embedding. The file is read directly by the
+    verify_spectrum plugin.
+    """
+    import uuid as _uuid
+
+    if not file.filename or not file.filename.lower().endswith(".jdx"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only .jdx (JCAMP-DX) files are accepted.",
+        )
+
+    spectrum_dir = Path(settings.UPLOAD_DIR) / "spectrum"
+    spectrum_dir.mkdir(parents=True, exist_ok=True)
+
+    file_id = str(_uuid.uuid4())
+    safe_name = file.filename.replace(" ", "_")
+    dest = spectrum_dir / f"{file_id}_{safe_name}"
+
+    try:
+        contents = await file.read()
+        dest.write_bytes(contents)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save spectrum file: {e}")
+
+    return {
+        "file_id": file_id,
+        "filename": file.filename,
+        "file_path": str(dest),
+    }
+
 
 # ============================================================
 # CONTEXT ENGINE (Phase 4: Smart Reading & Context)

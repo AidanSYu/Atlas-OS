@@ -9,13 +9,21 @@ from app.services.llm import LLMService
 logger = logging.getLogger(__name__)
 
 async def route_intent(query: str, llm_service: LLMService) -> str:
-    """Classify query into one of four agent types.
+    """Classify query into one of five agent types.
 
     SIMPLE         - Direct fact lookup, specific question about a document
     DEEP_DISCOVERY - Synthesis, connection-finding, hypothesis generation
     BROAD_RESEARCH - Survey, landscape scan, comparison across many sources
     MULTI_STEP     - Complex query requiring both deep and broad analysis
+    DISCOVERY      - Scientific computation requiring deterministic tools
     """
+    # Fast-path: keyword detection for DISCOVERY intent (avoids LLM call)
+    from app.services.agents.tool_schemas import DISCOVERY_INTENT_KEYWORDS
+    query_lower = query.lower()
+    if any(kw.lower() in query_lower for kw in DISCOVERY_INTENT_KEYWORDS):
+        logger.info("Meta-Router: DISCOVERY (keyword fast-path)")
+        return "DISCOVERY"
+
     prompt = f"""Classify this research query into exactly ONE category:
 
 SIMPLE - The user wants a specific fact, quote, or detail from their documents.
@@ -32,6 +40,12 @@ MULTI_STEP - The query requires BOTH deep analysis AND broad comparison, or has
 multiple distinct sub-questions that need different approaches.
 Examples: "Find connections between X and Y, then compare with alternative approaches"
 
+DISCOVERY - The user wants to perform scientific computation: molecular property prediction,
+synthesis planning, toxicity checking, or any query involving specific molecules (SMILES strings),
+chemical properties, or deterministic scientific tools.
+Examples: "What are the properties of aspirin?", "Check toxicity of CC(=O)OC1=CC=CC=C1C(=O)O",
+"Predict the LogP of ibuprofen", "Find me a soluble binder for PDB:4XYZ"
+
 Query: {query}
 
 Respond with ONLY the category name:"""
@@ -39,13 +53,13 @@ Respond with ONLY the category name:"""
     try:
         response = await llm_service.generate(prompt=prompt, temperature=0.0, max_tokens=20)
         response = response.strip().upper()
-        
-        valid_intents = ["SIMPLE", "DEEP_DISCOVERY", "BROAD_RESEARCH", "MULTI_STEP"]
+
+        valid_intents = ["SIMPLE", "DEEP_DISCOVERY", "BROAD_RESEARCH", "MULTI_STEP", "DISCOVERY"]
         # Basic parsing
         for intent in valid_intents:
             if intent in response:
                 return intent
-                
+
         return "DEEP_DISCOVERY" # Default fallback
     except Exception as e:
         logger.warning(f"Router classification failed: {e}, defaulting to DEEP_DISCOVERY")
@@ -76,7 +90,7 @@ async def ensure_optimal_model(intent: str, llm_service: LLMService) -> None:
 
         target_model = None
 
-        if intent in ("DEEP_DISCOVERY", "BROAD_RESEARCH", "MULTI_STEP"):
+        if intent in ("DEEP_DISCOVERY", "BROAD_RESEARCH", "MULTI_STEP", "DISCOVERY"):
             # Prefer a larger/smarter model
             for preferred in DEEP_MODELS:
                 match = next((m for m in available if preferred.lower() in m.lower()), None)
@@ -90,11 +104,11 @@ async def ensure_optimal_model(intent: str, llm_service: LLMService) -> None:
                 if match:
                     target_model = match
                     break
-        
+
         # If we found a better model and it's not the current one, swap
         if target_model and target_model != current:
             logger.info(f"Meta-Router: Swapping to optimal model for {intent}: {target_model}")
             await llm_service.load_model(target_model)
-            
+
     except Exception as e:
         logger.error(f"Model swapping failed: {e}")

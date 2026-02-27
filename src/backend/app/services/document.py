@@ -97,8 +97,17 @@ class DocumentService:
                 logger.warning(f"File not found for document {doc_id}: {file_path}")
                 return None
 
+            mime_map = {
+                ".pdf": "application/pdf",
+                ".txt": "text/plain",
+                ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                ".doc": "application/msword",
+            }
+            ext = file_path.suffix.lower()
+            media_type = mime_map.get(ext, "application/octet-stream")
+
             return FileResponse(
-                path=file_path, media_type="application/pdf", filename=document.filename
+                path=file_path, media_type=media_type, filename=document.filename
             )
         finally:
             session.close()
