@@ -207,6 +207,20 @@ class DocumentChunk(Base):
 
 
 # ============================================================
+# DISCOVERY SESSION
+# ============================================================
+
+class DiscoverySession(Base):
+    """Discovery session recording target parameters."""
+    __tablename__ = "discovery_sessions"
+
+    id = Column(String, primary_key=True, default=_generate_uuid)
+    target_params = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# ============================================================
 # DATABASE SETUP (SQLite embedded)
 # ============================================================
 

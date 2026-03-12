@@ -9,8 +9,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def locate_model_code():
-    # Path from logs
-    model_path = Path("C:/Users/aidan/OneDrive - Duke University/Code/ContAInnum_Atlas2.0_backup_20260124_181415/models/nomic-embed-text-v1.5")
+    # Use relative path from this script
+    model_path = Path(__file__).resolve().parent.parent / "models" / "nomic-embed-text-v1.5"
     
     logger.info(f"Loading model from {model_path}")
     try:

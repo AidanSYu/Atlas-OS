@@ -257,9 +257,6 @@ class LLMService:
         Returns:
             List of dicts with 'name', 'provider', and 'requires_key' fields.
         """
-        if not self._litellm_available:
-            return []
-
         models = []
         configured = settings.CLOUD_MODELS.split(",") if settings.CLOUD_MODELS else []
 
@@ -882,6 +879,12 @@ class LLMService:
         Returns:
             Generated text string
         """
+        # Cross-Store Bridge: prepend Discovery OS stage context when active
+        from app.services.stage_context import get_stage_context_preamble
+        _preamble = get_stage_context_preamble()
+        if _preamble:
+            system_message = _preamble + "\n\n" + system_message
+
         # Atlas 3.0: Route to API if in API mode (uses native chat format)
         if self._model_source == "api" and self._api_model_name:
             return await self._generate_via_api(

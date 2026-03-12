@@ -95,7 +95,8 @@
         "width": 1400,
         "minWidth": 800,
         "minHeight": 600,
-        "center": true
+        "center": true,
+        "decorations": false
       }
     ]
   }

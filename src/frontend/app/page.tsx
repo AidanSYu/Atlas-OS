@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
+import dynamic from 'next/dynamic';
 import { useRouter, usePathname } from 'next/navigation';
 import { api, ProjectInfo } from '@/lib/api';
 import {
@@ -16,7 +17,14 @@ import {
   BookOpen,
   Zap,
   Sparkles,
+  Database,
+  GitBranch,
 } from 'lucide-react';
+
+const WindowControls = dynamic(
+  () => import('@/components/WindowControls').then((m) => ({ default: m.WindowControls })),
+  { ssr: false }
+);
 
 export default function HomePage() {
   const router = useRouter();
@@ -29,22 +37,36 @@ export default function HomePage() {
   const [creatingProject, setCreatingProject] = useState(false);
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
+  // Tracks which project is being navigated to, so we can show an instant loading overlay
+  const [navigatingToId, setNavigatingToId] = useState<string | null>(null);
+  const [navigatingToName, setNavigatingToName] = useState<string>('');
 
   useEffect(() => {
+    let timeoutId: NodeJS.Timeout;
+    let isMounted = true;
+
     const loadProjects = async () => {
-      setLoading(true);
-      setError(null);
       try {
         const list = await api.listProjects();
+        if (!isMounted) return;
         setProjects(list);
-      } catch (e: any) {
-        setError(e.message || 'Failed to load projects');
-      } finally {
+        setError(null);
         setLoading(false);
+      } catch (e: any) {
+        if (!isMounted) return;
+        setError(e.message || 'Failed to connect to backend. Retrying...');
+        timeoutId = setTimeout(loadProjects, 3000);
       }
     };
 
+    setLoading(true);
+    setError(null);
     loadProjects();
+
+    return () => {
+      isMounted = false;
+      if (timeoutId) clearTimeout(timeoutId);
+    };
   }, [pathname]);
 
   const filteredProjects = useMemo(() => {
@@ -67,11 +89,14 @@ export default function HomePage() {
       setProjects((previous) => [created, ...previous]);
       setNewProjectName('');
       setShowCreateForm(false);
+      // Show loading overlay before navigation
+      setNavigatingToId(created.id);
+      setNavigatingToName(created.name);
       router.push(`/project/${encodeURIComponent(created.id)}`);
     } catch (e: any) {
-      setError(e.message || 'Failed to create project');
-    } finally {
       setCreatingProject(false);
+      setNavigatingToId(null);
+      setError(e.message || 'Failed to create project');
     }
   };
 
@@ -109,15 +134,25 @@ export default function HomePage() {
 
   return (
     <main className="min-h-screen bg-background text-foreground selection:bg-primary/30">
-      {/* Refined Header Section */}
-      <div className="border-b border-border/40 bg-card/30 backdrop-blur-md">
-        <div className="mx-auto max-w-6xl px-6 pt-16 pb-12 sm:px-10">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="flex h-8 w-8 items-center justify-center rounded bg-safety/10 border border-safety/20">
-              <Zap className="h-4 w-4 text-safety" />
-            </div>
-            <h1 className="font-display text-3xl font-medium tracking-tight text-white">Atlas</h1>
+      {/* Custom Title Bar Area for dragging/controls on the dashboard */}
+      <div data-tauri-drag-region className="relative top-0 right-0 left-0 h-8 flex justify-between px-2 items-center bg-card/80 backdrop-blur-sm z-[100] border-b border-border/40">
+        <div className="flex h-full items-center gap-1.5 no-drag select-none text-muted-foreground">
+          <div className="flex w-4 h-4 items-center justify-center rounded bg-safety/10 border border-safety/20 ml-2">
+            <Zap className="h-3 w-3 text-safety" />
           </div>
+          <span className="text-[12px] font-medium tracking-wide">Atlas</span>
+        </div>
+        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none text-[12px] text-muted-foreground/80 font-medium tracking-wide">
+          Dashboard
+        </div>
+        <div className="h-full shrink-0 no-drag">
+          <WindowControls />
+        </div>
+      </div>
+
+      {/* Refined Header Section */}
+      <div className="border-b border-border/40 bg-card/30 backdrop-blur-md pt-4">
+        <div className="mx-auto max-w-6xl px-6 pt-10 pb-10 sm:px-10">
           <p className="max-w-xl text-[13px] text-text-secondary leading-relaxed">
             Spatial Research Platform. Upload papers, trace relationships through dynamic knowledge graphs, and leverage autonomous agents for deep literature synthesis.
           </p>
@@ -235,9 +270,20 @@ export default function HomePage() {
                 key={project.id}
                 role="button"
                 tabIndex={0}
-                onClick={() => router.push(`/project/${encodeURIComponent(project.id)}`)}
-                onKeyDown={(e) => e.key === 'Enter' && router.push(`/project/${encodeURIComponent(project.id)}`)}
-                className="group relative flex h-36 cursor-pointer flex-col justify-between rounded border border-border/40 bg-card/30 p-5 text-left transition-all hover:border-safety/40 hover:bg-card/50"
+                onClick={() => {
+                  setNavigatingToId(project.id);
+                  setNavigatingToName(project.name);
+                  router.push(`/project/${encodeURIComponent(project.id)}`);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    setNavigatingToId(project.id);
+                    setNavigatingToName(project.name);
+                    router.push(`/project/${encodeURIComponent(project.id)}`);
+                  }
+                }}
+                className={`group relative flex h-36 cursor-pointer flex-col justify-between rounded border border-border/40 bg-card/30 p-5 text-left transition-all hover:border-safety/40 hover:bg-card/50 ${navigatingToId === project.id ? 'border-safety/60 bg-card/60 ring-1 ring-safety/20' : ''
+                  }`}
               >
                 {/* Delete button */}
                 <button
@@ -281,6 +327,59 @@ export default function HomePage() {
           </div>
         )}
       </div>
+
+      {/* Full-screen navigation loading overlay — appears immediately on project card click */}
+      {navigatingToId && (
+        <div className="fixed inset-0 z-[200] flex flex-col items-center justify-center bg-background/95 backdrop-blur-md animate-in fade-in duration-150">
+          {/* Ambient glow */}
+          <div className="absolute inset-0 overflow-hidden pointer-events-none">
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] rounded-full bg-safety/5 blur-3xl" />
+          </div>
+
+          <div className="relative flex flex-col items-center gap-8">
+            {/* Atlas logo + spinner */}
+            <div className="relative flex items-center justify-center">
+              {/* Outer ring */}
+              <div className="absolute h-20 w-20 rounded-full border border-safety/20 animate-ping" style={{ animationDuration: '2s' }} />
+              <div className="absolute h-16 w-16 rounded-full border border-safety/30" />
+              {/* Spinner */}
+              <div className="h-14 w-14 rounded-full border-2 border-safety/10 border-t-safety animate-spin" style={{ animationDuration: '0.9s' }} />
+              {/* Icon */}
+              <div className="absolute flex items-center justify-center">
+                <Zap className="h-5 w-5 text-safety" />
+              </div>
+            </div>
+
+            {/* Text */}
+            <div className="flex flex-col items-center gap-2 text-center">
+              <p className="text-[13px] font-medium text-text-primary tracking-wide">
+                Opening <span className="text-safety">{navigatingToName}</span>
+              </p>
+              <p className="text-[11px] text-text-secondary/60">Loading workspace environment…</p>
+            </div>
+
+            {/* Animated step indicators */}
+            <div className="flex items-center gap-6">
+              {[
+                { icon: Database, label: 'Library' },
+                { icon: GitBranch, label: 'Graph' },
+                { icon: Brain, label: 'Agents' },
+              ].map(({ icon: Icon, label }, i) => (
+                <div
+                  key={label}
+                  className="flex flex-col items-center gap-1.5 opacity-0 animate-in fade-in duration-300"
+                  style={{ animationDelay: `${150 + i * 120}ms`, animationFillMode: 'forwards' }}
+                >
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-border/40 bg-card/50">
+                    <Icon className="h-3.5 w-3.5 text-safety/70" />
+                  </div>
+                  <span className="text-[10px] text-text-secondary/50 tracking-wider uppercase">{label}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

@@ -352,19 +352,19 @@ def _build_discovery_graph(
             output_summary = output_summary[:300] + "..."
         trace.append(f"[Step {iteration}] {action} result: {output_summary}")
 
-        candidates = list(state.get("candidates", []))
+        candidates = [dict(c) for c in state.get("candidates", [])]
         if action == "predict_properties" and output.get("valid"):
             smiles = output.get("smiles", "")
-            existing = next((c for c in candidates if c.get("smiles") == smiles), None)
-            if existing:
-                existing["properties"] = output
+            idx = next((i for i, c in enumerate(candidates) if c.get("smiles") == smiles), None)
+            if idx is not None:
+                candidates[idx] = {**candidates[idx], "properties": output}
             else:
                 candidates.append({"smiles": smiles, "properties": output})
         elif action == "check_toxicity" and output.get("valid"):
             smiles = output.get("smiles", "")
-            existing = next((c for c in candidates if c.get("smiles") == smiles), None)
-            if existing:
-                existing["toxicity"] = output
+            idx = next((i for i, c in enumerate(candidates) if c.get("smiles") == smiles), None)
+            if idx is not None:
+                candidates[idx] = {**candidates[idx], "toxicity": output}
             else:
                 candidates.append({"smiles": smiles, "toxicity": output})
 
@@ -373,9 +373,9 @@ def _build_discovery_graph(
             smiles = action_input.get("smiles", "")
             routes = output.get("routes", [])
             if smiles and routes:
-                existing = next((c for c in candidates if c.get("smiles") == smiles), None)
-                if existing:
-                    existing["synthesis_route"] = routes[0] if routes else {}
+                idx = next((i for i, c in enumerate(candidates) if c.get("smiles") == smiles), None)
+                if idx is not None:
+                    candidates[idx] = {**candidates[idx], "synthesis_route": routes[0] if routes else {}}
                 else:
                     candidates.append({"smiles": smiles, "synthesis_route": routes[0] if routes else {}})
 

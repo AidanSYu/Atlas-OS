@@ -8,9 +8,10 @@ import { toastError, toastSuccess } from '@/stores/toastStore';
 interface SettingsModalProps {
     open: boolean;
     onOpenChange: (open: boolean) => void;
+    onKeysUpdated?: () => void;
 }
 
-export default function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
+export default function SettingsModal({ open, onOpenChange, onKeysUpdated }: SettingsModalProps) {
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
     const [status, setStatus] = useState({
@@ -102,10 +103,13 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
             const anyFailed = (res.has_openai && !verifyRes.openai) || (res.has_anthropic && !verifyRes.anthropic)
                 || (res.has_deepseek && !verifyRes.deepseek) || (res.has_minimax && !verifyRes.minimax);
             if (anyFailed) {
-                toastError('Some keys could not be verified. Check key validity.');
+                toastError(
+                    'Keys saved. Verification failed for some keys (network, timeout, or provider limits can cause this). You can still try using the model.'
+                );
             }
 
             onOpenChange(false);
+            onKeysUpdated?.();
         } catch (err) {
             toastError('Failed to save API keys');
             console.error(err);
@@ -218,8 +222,8 @@ function ApiKeyInput({
                         <CheckCircle2 className="h-3 w-3" /> Verified
                     </span>
                 ) : isConfigured ? (
-                    <span className="flex items-center gap-1 text-[10px] uppercase font-bold tracking-wider text-amber-600 dark:text-amber-500">
-                        <AlertCircle className="h-3 w-3" /> Saved (unverified)
+                    <span className="flex items-center gap-1 text-[10px] uppercase font-bold tracking-wider text-muted-foreground">
+                        <CheckCircle2 className="h-3 w-3" /> Saved
                     </span>
                 ) : (
                     <span className="flex items-center gap-1 text-[10px] uppercase font-bold tracking-wider text-muted-foreground">

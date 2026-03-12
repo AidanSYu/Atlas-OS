@@ -987,8 +987,8 @@ CRITICAL: If evidence is insufficient, explicitly state "I cannot find sufficien
             trace.append(f"Generated hypothesis ({len(thinking.split('Step'))} reasoning steps)")
             trace.append(f"Confidence: {confidence_score:.2f}")
 
-            # Append thinking to trace for transparency
-            reasoning_with_thinking = list(state.get("reasoning_trace", [])) + trace + [f"[THINKING]\n{thinking}"]
+            # Append thinking to trace (trace already contains accumulated state; do not duplicate)
+            reasoning_with_thinking = trace + [f"[THINKING]\n{thinking}"]
 
             return {
                 **state,
@@ -2488,8 +2488,11 @@ async def run_swarm_query_streaming(
         return
 
     # We need to fetch the final state to get the complete answer
-    final_snapshot = await compiled.aget(config)
-    final_state = final_snapshot.values if final_snapshot else {}
+    try:
+        final_snapshot = await compiled.aget_state(config)
+    except AttributeError:
+        final_snapshot = None
+    final_state = final_snapshot.values if (final_snapshot and hasattr(final_snapshot, "values")) else {}
 
     # If final_state is empty (graph failed?), try to use initial_state updated?
     # astream_events doesn't return the final state directly.
@@ -2721,8 +2724,11 @@ async def run_moe_query_streaming(
         logger.info("MoE cancelled before final result emission")
         return
 
-    final_snapshot = await compiled.aget(config)
-    final_state = final_snapshot.values if final_snapshot else {}
+    try:
+        final_snapshot = await compiled.aget_state(config)
+    except AttributeError:
+        final_snapshot = None
+    final_state = final_snapshot.values if (final_snapshot and hasattr(final_snapshot, "values")) else {}
 
     conf = final_state.get("confidence_score")
     yield ("complete", {

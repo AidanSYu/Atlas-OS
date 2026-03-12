@@ -1,0 +1,70 @@
+'use client';
+
+import React, { useEffect, useState } from 'react';
+import { Minus, Square, X, Copy } from 'lucide-react';
+import { appWindow } from '@tauri-apps/api/window';
+
+export function WindowControls() {
+    const [isMaximized, setIsMaximized] = useState(false);
+
+    useEffect(() => {
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/bbc8b2ad-e887-4ae4-a28b-fd483f17736b', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'f2888d' },
+            body: JSON.stringify({
+                sessionId: 'f2888d',
+                location: 'WindowControls.tsx:useEffect',
+                message: 'WindowControls mounted (client only)',
+                data: { hasWindow: typeof window !== 'undefined' },
+                timestamp: Date.now(),
+                hypothesisId: 'H2',
+            }),
+        }).catch(() => {});
+        // #endregion
+        // Check initial state
+        appWindow.isMaximized().then(setIsMaximized);
+
+        // Listen for resize events to update the maximize icon
+        const unlisten = appWindow.onResized(async () => {
+            const maximized = await appWindow.isMaximized();
+            setIsMaximized(maximized);
+        });
+
+        return () => {
+            unlisten.then((f) => f());
+        };
+    }, []);
+
+    return (
+        <div className="flex h-full items-center">
+            <button
+                onClick={() => appWindow.minimize()}
+                className="flex h-full w-11 items-center justify-center text-muted-foreground transition-colors hover:bg-white/10"
+                title="Minimize"
+            >
+                <Minus className="h-3.5 w-3.5" />
+            </button>
+
+            <button
+                onClick={() => appWindow.toggleMaximize()}
+                className="flex h-full w-11 items-center justify-center text-muted-foreground transition-colors hover:bg-white/10"
+                title={isMaximized ? 'Restore' : 'Maximize'}
+            >
+                {isMaximized ? (
+                    <Copy className="h-3 w-3" /> // A stacked windows icon represents "Restore Down"
+                ) : (
+                    <Square className="h-3.5 w-3.5" />
+                )}
+            </button>
+
+            <button
+                onClick={() => appWindow.close()}
+                className="flex h-full w-11 items-center justify-center text-muted-foreground transition-colors hover:bg-red-500 hover:text-white"
+                title="Close"
+            >
+                <X className="h-4 w-4" />
+            </button>
+        </div>
+    );
+}

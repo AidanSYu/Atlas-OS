@@ -4,6 +4,8 @@ import React, { useEffect, useRef } from 'react';
 import { Terminal, Activity, FileText, ShieldCheck, Loader2, GitMerge, Brain, CheckCircle2, MapPin } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import type { Run } from '@/stores/runStore';
+import { deriveStreamProgress } from './chat/RunProgressDisplay';
 
 interface StreamProgress {
     currentNode: string;
@@ -15,12 +17,29 @@ interface StreamProgress {
 }
 
 interface AgentWorkbenchProps {
-    streamProgress: StreamProgress | null;
-    streamingText: string;
-    isLoading: boolean;
+    streamProgress?: StreamProgress | null;
+    streamingText?: string;
+    isLoading?: boolean;
+    run?: Run | null;
 }
 
-export function AgentWorkbench({ streamProgress, streamingText, isLoading }: AgentWorkbenchProps) {
+export function AgentWorkbench({
+    streamProgress: streamProgressProp,
+    streamingText: streamingTextProp,
+    isLoading: isLoadingProp,
+    run,
+}: AgentWorkbenchProps) {
+    const isRunBased = run != null;
+    const streamProgress = isRunBased ? deriveStreamProgress(run) : (streamProgressProp ?? null);
+    const streamingText = isRunBased
+        ? run.events
+            .filter((e): e is Extract<typeof e, { type: 'chunk' }> => e.type === 'chunk')
+            .map((e) => e.content)
+            .join('')
+        : (streamingTextProp ?? '');
+    const isLoading = isRunBased
+        ? run != null && !['completed', 'failed', 'cancelled', 'queued'].includes(run.status)
+        : (isLoadingProp ?? false);
     const terminalEndRef = useRef<HTMLDivElement>(null);
 
     // Auto-scroll the terminal to the bottom as new thoughts stream in

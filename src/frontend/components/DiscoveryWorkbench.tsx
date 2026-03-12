@@ -4,6 +4,8 @@ import React, { useEffect, useRef, useMemo } from 'react';
 import { Terminal, Activity, FileText, Database, ShieldCheck, Loader2, Beaker, Zap, CheckCircle2, AlertTriangle, ChevronRight, Binary, Server, BarChart3 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import type { Run } from '@/stores/runStore';
+import { deriveStreamProgress } from './chat/RunProgressDisplay';
 
 interface StreamProgress {
     currentNode: string;
@@ -17,12 +19,23 @@ interface StreamProgress {
 }
 
 interface DiscoveryWorkbenchProps {
-    streamProgress: StreamProgress | null;
-    isLoading: boolean;
+    streamProgress?: StreamProgress | null;
+    isLoading?: boolean;
     finalCandidates?: any[];
+    run?: Run | null;
 }
 
-export function DiscoveryWorkbench({ streamProgress, isLoading, finalCandidates }: DiscoveryWorkbenchProps) {
+export function DiscoveryWorkbench({
+    streamProgress: streamProgressProp,
+    isLoading: isLoadingProp,
+    finalCandidates,
+    run,
+}: DiscoveryWorkbenchProps) {
+    const isRunBased = run != null;
+    const streamProgress = isRunBased ? deriveStreamProgress(run) : (streamProgressProp ?? null);
+    const isLoading = isRunBased
+        ? run != null && !['completed', 'failed', 'cancelled', 'queued'].includes(run.status)
+        : (isLoadingProp ?? false);
     const terminalEndRef = useRef<HTMLDivElement>(null);
 
     // Auto-scroll the terminal

@@ -1,3 +1,6 @@
+import { streamSSE, NormalizedEvent, FailureCategory } from './stream-adapter';
+export type { NormalizedEvent, FailureCategory };
+
 // Detect if running in Tauri desktop app
 declare global {
   interface Window {
@@ -19,6 +22,10 @@ function getApiBaseUrl(): string {
 }
 
 const API_BASE_URL = getApiBaseUrl();
+
+export function getApiBase(): string {
+  return API_BASE_URL;
+}
 
 const API_TIMEOUT = 30000;
 const CHAT_TIMEOUT = 180000;
@@ -90,12 +97,25 @@ export interface Citation {
   text?: string;
 }
 
+export interface FollowUpSuggestion {
+  label: string;
+  query: string;
+}
+
+export interface FollowUpSuggestions {
+  depth: FollowUpSuggestion;
+  breadth: FollowUpSuggestion;
+  opposition: FollowUpSuggestion;
+}
+
 export interface ChatResponse {
   answer: string;
   reasoning: string;
   citations: Citation[];
   relationships?: Array<{ source: string; type: string; target: string; context?: string }>;
   context_sources?: any;
+  // Follow-up taxonomy (D4)
+  follow_ups?: FollowUpSuggestions;
 }
 
 export interface EntityInfo {
@@ -422,13 +442,15 @@ export const api = {
 
   // ---- Chat (Librarian RAG) ----
 
-  async chat(query: string, projectId?: string, signal?: AbortSignal): Promise<ChatResponse> {
+  async chat(query: string, projectId?: string, signal?: AbortSignal, stageContext?: Record<string, any> | null): Promise<ChatResponse> {
+    const payload: Record<string, any> = { query, project_id: projectId };
+    if (stageContext) payload.stage_context = stageContext;
     const response = await fetchWithTimeout(
       `${API_BASE_URL}/chat`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query, project_id: projectId }),
+        body: JSON.stringify(payload),
         signal,
       },
       CHAT_TIMEOUT
@@ -473,52 +495,30 @@ export const api = {
     sessionId?: string,
     signal?: AbortSignal
   ): Promise<void> {
-    const response = await fetch(`${API_BASE_URL}/api/moe/stream`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        query,
-        project_id: projectId,
-        session_id: sessionId,
-      }),
-      signal,
-    });
-
-    if (!response.ok) {
-      throw new Error(`MoE streaming failed: ${response.statusText}`);
-    }
-
-    const reader = response.body?.getReader();
-    const decoder = new TextDecoder();
-    if (!reader) return;
-
-    let buffer = '';
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const events = buffer.split('\n\n');
-        buffer = events.pop() || '';
-
-        for (const eventBlock of events) {
-          if (!eventBlock.trim()) continue;
-          let type = '';
-          let data = null;
-          for (const line of eventBlock.split('\n')) {
-            if (line.startsWith('event: ')) type = line.substring(7).trim();
-            else if (line.startsWith('data: ')) {
-              try { data = JSON.parse(line.substring(6).trim()); }
-              catch (e) { console.error('JSON parse error:', e); }
-            }
-          }
-          if (type && data) onEvent(type, data);
+    await streamSSE(
+      `${API_BASE_URL}/api/moe/stream`,
+      { query, project_id: projectId, session_id: sessionId },
+      (event) => {
+        if (event.type === 'error') {
+          onEvent('error', { message: event.message });
+        } else if (event.type === 'cancelled') {
+          onEvent('cancelled', {});
+        } else if (event.type === 'complete') {
+          onEvent('complete', event.result);
+        } else if (event.type === 'routing') {
+          onEvent('routing', { brain: event.mode, intent: event.intent });
+        } else if (event.type === 'evidence') {
+          onEvent('evidence', { count: event.count });
+        } else if (event.type === 'grounding') {
+          onEvent('grounding', { claim: event.claim, status: event.status, confidence: event.confidence });
+        } else if (event.type === 'chunk') {
+          onEvent('chunk', { content: event.content });
+        } else {
+          onEvent(event.type, event);
         }
-      }
-    } finally {
-      reader.releaseLock();
-    }
+      },
+      { signal, timeout: SWARM_TIMEOUT },
+    );
   },
 
   async streamMoEHypotheses(
@@ -528,52 +528,24 @@ export const api = {
     sessionId?: string,
     signal?: AbortSignal
   ): Promise<void> {
-    const response = await fetch(`${API_BASE_URL}/api/moe/hypotheses`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        query,
-        project_id: projectId,
-        session_id: sessionId,
-      }),
-      signal,
-    });
-
-    if (!response.ok) {
-      throw new Error(`MoE hypotheses streaming failed: ${response.statusText}`);
-    }
-
-    const reader = response.body?.getReader();
-    const decoder = new TextDecoder();
-    if (!reader) return;
-
-    let buffer = '';
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const events = buffer.split('\n\n');
-        buffer = events.pop() || '';
-
-        for (const eventBlock of events) {
-          if (!eventBlock.trim()) continue;
-          let type = '';
-          let data = null;
-          for (const line of eventBlock.split('\n')) {
-            if (line.startsWith('event: ')) type = line.substring(7).trim();
-            else if (line.startsWith('data: ')) {
-              try { data = JSON.parse(line.substring(6).trim()); }
-              catch (e) { console.error('JSON parse error:', e); }
-            }
-          }
-          if (type && data) onEvent(type, data);
+    await streamSSE(
+      `${API_BASE_URL}/api/moe/hypotheses`,
+      { query, project_id: projectId, session_id: sessionId },
+      (event) => {
+        if (event.type === 'error') {
+          onEvent('error', { message: event.message });
+        } else if (event.type === 'cancelled') {
+          onEvent('cancelled', {});
+        } else if (event.type === 'hypotheses') {
+          onEvent('hypotheses', { items: event.items });
+        } else if (event.type === 'routing') {
+          onEvent('routing', { brain: event.mode, intent: event.intent });
+        } else {
+          onEvent(event.type, event);
         }
-      }
-    } finally {
-      reader.releaseLock();
-    }
+      },
+      { signal, timeout: SWARM_TIMEOUT },
+    );
   },
 
   // ---- Entities & Graph ----
@@ -848,71 +820,32 @@ export const api = {
     sessionId?: string,
     signal?: AbortSignal
   ): Promise<void> {
-    const response = await fetch(`${API_BASE_URL}/api/swarm/stream`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        query,
-        project_id: projectId,
-        session_id: sessionId
-      }),
-      signal,
-    });
-
-    if (!response.ok) {
-      throw new Error(`Streaming failed: ${response.statusText}`);
-    }
-
-    const reader = response.body?.getReader();
-    const decoder = new TextDecoder();
-
-    if (!reader) return;
-
-    // FIX: Persistent buffer to handle SSE events spanning multiple chunks
-    let buffer = '';
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value, { stream: true });
-        buffer += chunk; // Append to persistent buffer
-
-        // Split by double newline (SSE standard block separator)
-        const events = buffer.split('\n\n');
-
-        // Keep the last incomplete event in the buffer
-        buffer = events.pop() || '';
-
-        for (const eventBlock of events) {
-          if (!eventBlock.trim()) continue;
-
-          // Simple SSE parsing
-          let type = '';
-          let data = null;
-
-          const lines = eventBlock.split('\n');
-          for (const line of lines) {
-            if (line.startsWith('event: ')) {
-              type = line.substring(7).trim();
-            } else if (line.startsWith('data: ')) {
-              try {
-                data = JSON.parse(line.substring(6).trim());
-              } catch (e) {
-                console.error('JSON parse error in stream:', e);
-              }
-            }
-          }
-
-          if (type && data) {
-            onEvent(type, data);
-          }
+    await streamSSE(
+      `${API_BASE_URL}/api/swarm/stream`,
+      { query, project_id: projectId, session_id: sessionId },
+      (event) => {
+        if (event.type === 'error') {
+          onEvent('error', { message: event.message });
+        } else if (event.type === 'cancelled') {
+          onEvent('cancelled', {});
+        } else if (event.type === 'complete') {
+          onEvent('complete', event.result);
+        } else if (event.type === 'routing') {
+          onEvent('routing', { brain: event.mode, intent: event.intent });
+        } else if (event.type === 'graph_analysis') {
+          onEvent('graph_analysis', event.data);
+        } else if (event.type === 'evidence') {
+          onEvent('evidence', { count: event.count });
+        } else if (event.type === 'grounding') {
+          onEvent('grounding', { claim: event.claim, status: event.status, confidence: event.confidence });
+        } else if (event.type === 'chunk') {
+          onEvent('chunk', { content: event.content });
+        } else {
+          onEvent(event.type, event);
         }
-      }
-    } finally {
-      reader.releaseLock();
-    }
+      },
+      { signal, timeout: SWARM_TIMEOUT },
+    );
   },
 
   // ============================================================
@@ -957,62 +890,178 @@ export const api = {
     };
     if (spectrumFilePath) body.spectrum_file_path = spectrumFilePath;
 
-    const response = await fetch(`${API_BASE_URL}/api/discovery/stream`, {
+    await streamSSE(
+      `${API_BASE_URL}/api/discovery/stream`,
+      body,
+      (event) => {
+        if (event.type === 'error') {
+          onEvent('error', { message: event.message });
+        } else if (event.type === 'cancelled') {
+          onEvent('cancelled', {});
+        } else if (event.type === 'complete') {
+          onEvent('complete', event.result);
+        } else if (event.type === 'routing') {
+          onEvent('routing', { brain: event.mode, intent: event.intent });
+        } else if (event.type === 'tool_call') {
+          onEvent('tool_call', { tool: event.tool, input: event.input });
+        } else if (event.type === 'tool_result') {
+          onEvent('tool_result', { tool: event.tool, output: event.output });
+        } else if (event.type === 'evidence') {
+          onEvent('evidence', { count: event.count });
+        } else if (event.type === 'chunk') {
+          onEvent('chunk', { content: event.content });
+        } else {
+          onEvent(event.type, event);
+        }
+      },
+      { signal, timeout: SWARM_TIMEOUT },
+    );
+  },
+
+  // ---- Intent routing (lightweight, no execution) ----
+
+  async routeIntent(query: string, projectId: string): Promise<{ intent: string }> {
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/api/route`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, project_id: projectId }),
+      },
+      API_TIMEOUT,
+    );
+    return handleResponse(response);
+  },
+
+  async parseBrainstorm(text: string, domain: string): Promise<{
+    objective: string;
+    propertyConstraints: any[];
+    domainSpecificConstraints: Record<string, string>;
+  }> {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/api/discovery/parse-brainstorm`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal,
+      body: JSON.stringify({ text, domain }),
     });
+    return handleResponse(response);
+  },
 
-    if (!response.ok) {
-      throw new Error(`Discovery streaming failed: ${response.statusText}`);
-    }
+  // ---- Discovery Sessions (Golden Path) ----
 
-    const reader = response.body?.getReader();
-    const decoder = new TextDecoder();
+  async listDiscoverySessions(): Promise<Array<{
+    session_id: string;
+    session_name: string;
+    created_at: string | null;
+    status: string;
+    folder_exists: boolean;
+  }>> {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/api/discovery/sessions`);
+    return handleResponse(response);
+  },
 
-    if (!reader) return;
+  async getSessionFiles(sessionId: string): Promise<Array<{
+    filename: string;
+    path: string;
+    size_bytes: number;
+  }>> {
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/api/discovery/${encodeURIComponent(sessionId)}/files`
+    );
+    return handleResponse(response);
+  },
 
-    let buffer = '';
+  async readSessionFile(sessionId: string, filePath: string): Promise<{
+    filename: string;
+    path: string;
+    content: string;
+    size_bytes: number;
+  }> {
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/api/discovery/${encodeURIComponent(sessionId)}/files/${filePath}`
+    );
+    return handleResponse(response);
+  },
 
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+  async getSessionMemory(sessionId: string): Promise<{
+    session_id: string;
+    initialized_at: string;
+    domain: string | null;
+    corpus_context: {
+      entities: string[];
+      document_ids: string[];
+      summary: string;
+    } | null;
+    research_goals: string[];
+    constraints: Record<string, any>;
+    agents_completed: string[];
+    current_stage: string;
+    metadata: Record<string, any>;
+  }> {
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/api/discovery/${encodeURIComponent(sessionId)}/memory`
+    );
+    return handleResponse(response);
+  },
 
-        const chunk = decoder.decode(value, { stream: true });
-        buffer += chunk;
+  // ---- Executor Agent (Phase 5) ----
 
-        const events = buffer.split('\n\n');
-        buffer = events.pop() || '';
-
-        for (const eventBlock of events) {
-          if (!eventBlock.trim()) continue;
-
-          let type = '';
-          let data = null;
-
-          const lines = eventBlock.split('\n');
-          for (const line of lines) {
-            if (line.startsWith('event: ')) {
-              type = line.substring(7).trim();
-            } else if (line.startsWith('data: ')) {
-              try {
-                data = JSON.parse(line.substring(6).trim());
-              } catch (e) {
-                console.error('JSON parse error in discovery stream:', e);
-              }
-            }
-          }
-
-          if (type && data) {
-            onEvent(type, data);
-          }
-        }
+  async startExecutor(sessionId: string, autoApprove: boolean = false): Promise<{ status: string }> {
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/api/discovery/${encodeURIComponent(sessionId)}/executor/start`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ auto_approve: autoApprove }),
       }
-    } finally {
-      reader.releaseLock();
-    }
+    );
+    return handleResponse(response);
+  },
+
+  async approveScript(
+    sessionId: string,
+    decision: 'approve' | 'reject' | 'edit',
+    editedCode?: string
+  ): Promise<{ status: string; decision: string }> {
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/api/discovery/${encodeURIComponent(sessionId)}/executor/approve`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          decision,
+          edited_code: editedCode || null,
+        }),
+      }
+    );
+    return handleResponse(response);
+  },
+
+  // ---- Plugin Visibility (Phase 5 - Part 2) ----
+
+  async getPlugins(): Promise<{
+    plugins: Array<{
+      name: string;
+      description: string;
+      loaded: boolean;
+      type: 'deterministic' | 'semantic';
+      input_schema: any;
+      output_schema: any;
+    }>;
+    orchestrator_provider: string;
+    orchestrator_model: string;
+    tool_provider: string;
+    tool_model: string;
+  }> {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/api/discovery/plugins`);
+    return handleResponse(response);
+  },
+
+  async unloadPlugin(pluginName: string): Promise<{ status: string; plugin: string }> {
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/api/discovery/plugins/${encodeURIComponent(pluginName)}/unload`,
+      { method: 'POST' }
+    );
+    return handleResponse(response);
   },
 };
 

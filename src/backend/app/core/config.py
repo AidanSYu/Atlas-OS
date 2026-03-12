@@ -7,6 +7,12 @@ from pathlib import Path
 def _get_backend_dir() -> Path:
     return Path(__file__).resolve().parent.parent.parent
 
+
+def get_env_path() -> Path:
+    """Path to .env file (same file used for loading and saving API keys)."""
+    return _get_backend_dir() / ".env"
+
+
 def _get_models_dir() -> str:
     return str(_get_backend_dir() / "models")
 
@@ -16,6 +22,10 @@ def _get_db_path() -> str:
 def _get_qdrant_path() -> str:
     return str(_get_backend_dir() / "qdrant_storage")
 
+def _get_data_dir() -> str:
+    return str(_get_backend_dir() / "data")
+
+
 def _get_upload_dir() -> str:
     return str(_get_backend_dir() / "data" / "uploads")
 
@@ -23,7 +33,7 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
     
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(_get_backend_dir() / ".env"),
         case_sensitive=True,
         extra="ignore"
     )
@@ -44,6 +54,7 @@ class Settings(BaseSettings):
     MODELS_DIR: str = Field(default_factory=_get_models_dir)
     
     # File Storage
+    DATA_DIR: str = Field(default_factory=_get_data_dir)
     UPLOAD_DIR: str = Field(default_factory=_get_upload_dir)
     
     # API Configuration
@@ -100,7 +111,7 @@ class Settings(BaseSettings):
 
     # Cloud model registry: models available when API keys are configured
     # Format: "provider/model-name" as used by LiteLLM
-    CLOUD_MODELS: str = "deepseek/deepseek-chat,deepseek/deepseek-reasoner,minimax/MiniMax-M2.5"
+    CLOUD_MODELS: str = "deepseek/deepseek-chat,deepseek/deepseek-reasoner,minimax/MiniMax-M2.5,openai/gpt-4o,openai/gpt-4o-mini,anthropic/claude-sonnet-4-20250514"
 
     # Default model source preference: "local" or "api"
     DEFAULT_MODEL_SOURCE: str = "local"
@@ -124,10 +135,19 @@ class Settings(BaseSettings):
     ENABLE_DISCOVERY_MODE: bool = True     # Enable the Discovery OS pipeline
     DISCOVERY_DEFAULT_PHASE: str = "hit_identification"  # Default workflow phase
 
+    # Discovery OS LLM Configuration (Phase 5 - Part 1: Isolated from global model selector)
+    # These settings are ONLY used by Discovery OS agents (Coordinator, Executor)
+    # and do NOT affect chat/retrieval/global model selection
+    DISCOVERY_ORCHESTRATION_PROVIDER: str = "deepseek"  # Provider for planning/reasoning
+    DISCOVERY_ORCHESTRATION_MODEL: str = "deepseek-reasoner"  # Model for high-level orchestration
+    DISCOVERY_TOOL_PROVIDER: str = "minimax"  # Provider for tool calling/constrained generation
+    DISCOVERY_TOOL_MODEL: str = "MiniMax-M2.5"  # Model for structured outputs and tool calls
+
 
 settings = Settings()
 
 # Ensure directories exist
+Path(settings.DATA_DIR).mkdir(parents=True, exist_ok=True)
 Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
 Path(settings.MODELS_DIR).mkdir(parents=True, exist_ok=True)
 Path(settings.QDRANT_STORAGE_PATH).mkdir(parents=True, exist_ok=True)

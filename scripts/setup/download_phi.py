@@ -14,16 +14,9 @@ def download_model():
     # But wait, run_server.py says:
     # Dev: Path(__file__).resolve().parent.parent.parent / "models" -> which is project_root/models
     
-    # Let's try to find the project root
-    current_dir = Path(os.getcwd())
-    if "src" in str(current_dir):
-        # We are likely in src/backend or similar
-        project_root = current_dir
-        while project_root.name != "ContAInnum_Atlas2.0_backup_20260124_181415" and project_root.parent != project_root:
-            project_root = project_root.parent
-    else:
-        # Fallback
-        project_root = Path(r"C:\Users\aidan\OneDrive - Duke University\Code\ContAInnum_Atlas2.0_backup_20260124_181415")
+    # Find project root relative to this script
+    # This script is at scripts/setup/download_phi.py
+    project_root = Path(__file__).resolve().parent.parent.parent
         
     models_dir = project_root / "models"
     models_dir.mkdir(parents=True, exist_ok=True)

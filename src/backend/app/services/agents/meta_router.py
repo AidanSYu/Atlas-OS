@@ -29,12 +29,13 @@ async def route_intent(query: str, llm_service: LLMService) -> str:
 SIMPLE - The user wants a specific fact, quote, or detail from their documents.
 Examples: "What methodology did they use?", "What is the sample size in Table 2?"
 
-DEEP_DISCOVERY - The user wants to find hidden connections, synthesize across domains,
-generate hypotheses, or discover relationships.
-Examples: "How might X relate to Y?", "What connections exist between these papers?"
+DEEP_DISCOVERY - The user wants to find a specific hidden connection or relationship
+between named entities, or to drill into one narrow discovery path.
+Examples: "How might compound X relate to pathway Y?", "What connections exist between these two papers?"
 
-BROAD_RESEARCH - The user wants a broad survey, comparison, or landscape overview.
-Examples: "Compare the methods across all papers", "What approaches exist for X?"
+BROAD_RESEARCH - The user wants a broad survey, landscape overview, or synthesis of
+connections/directions across the whole corpus or database.
+Examples: "What are key connections across this database?", "What research directions or hypotheses could researchers be taking?", "Compare the methods across all papers", "What approaches exist for X?"
 
 MULTI_STEP - The query requires BOTH deep analysis AND broad comparison, or has
 multiple distinct sub-questions that need different approaches.

@@ -15,10 +15,12 @@ import {
   CheckCircle2,
   Clock,
   AlertCircle,
-  FileDown,
+  FlaskConical,
+  Plus,
 } from 'lucide-react';
 import { api, FileInfo } from '@/lib/api';
 import { toastError, toast, toastSuccess } from '@/stores/toastStore';
+import { useDiscoveryStore } from '@/stores/discoveryStore';
 
 interface LibrarySidebarProps {
   onFileSelect: (docId: string, filename: string) => void;
@@ -26,6 +28,10 @@ interface LibrarySidebarProps {
   projectId: string;
   onIngestionComplete?: () => void;
   onFileDeleted?: (docId: string) => void;
+  onOpenDiscoverySession?: (sessionId: string, sessionName: string) => void;
+  onStartDiscovery?: () => void;
+  /** Increment to trigger a refetch of the file list (e.g. after upload/import from menu) */
+  refreshTrigger?: number;
 }
 
 export default function LibrarySidebar({
@@ -34,15 +40,20 @@ export default function LibrarySidebar({
   projectId,
   onIngestionComplete,
   onFileDeleted,
+  onOpenDiscoverySession,
+  onStartDiscovery,
+  refreshTrigger,
 }: LibrarySidebarProps) {
   const [files, setFiles] = useState<FileInfo[]>([]);
-  const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [smartGroupsOpen, setSmartGroupsOpen] = useState(true);
+  const [discoverySessionsOpen, setDiscoverySessionsOpen] = useState(true);
   const [allDocsOpen, setAllDocsOpen] = useState(true);
   const prevProcessingRef = useRef(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const sessions = useDiscoveryStore((s) => s.sessions);
+  const sessionList = useMemo(() => Object.values(sessions), [sessions]);
 
   const loadFiles = useCallback(
     async (silent = false) => {
@@ -64,6 +75,10 @@ export default function LibrarySidebar({
     loadFiles();
   }, [loadFiles]);
 
+  useEffect(() => {
+    if (refreshTrigger != null && refreshTrigger > 0) loadFiles(true);
+  }, [refreshTrigger, loadFiles]);
+
   const hasProcessing = files.some((f) => f.status === 'processing');
 
   useEffect(() => {
@@ -79,24 +94,6 @@ export default function LibrarySidebar({
     return () => window.clearInterval(interval);
   }, [hasProcessing, loadFiles, onIngestionComplete]);
 
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const fileList = event.target.files;
-    if (!fileList || fileList.length === 0 || !projectId) return;
-
-    setUploading(true);
-    try {
-      for (let i = 0; i < fileList.length; i++) {
-        await api.uploadFile(fileList[i], projectId);
-      }
-      await loadFiles();
-    } catch (error) {
-      toastError((error as Error).message);
-    } finally {
-      setUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    }
-  };
-
   const handleDelete = async (e: React.MouseEvent, fileId: string) => {
     e.stopPropagation();
     try {
@@ -105,26 +102,6 @@ export default function LibrarySidebar({
       setFiles((prev) => prev.filter((f) => f.doc_id !== fileId));
     } catch (err) {
       console.error(err);
-    }
-  };
-
-  const handleImport = async (file: File) => {
-    try {
-      toast('Importing bibliography...', 'info');
-      const result = await api.importBibtex(file, projectId);
-
-      if (result.total_imported > 0) {
-        toastSuccess(`Imported ${result.total_imported} of ${result.total_entries} entries`);
-        await loadFiles();
-      } else {
-        toastError('No entries were imported');
-      }
-
-      if (result.skipped.length > 0) {
-        console.warn('Skipped entries:', result.skipped);
-      }
-    } catch (error: any) {
-      toastError(`Import failed: ${error.message}`);
     }
   };
 
@@ -219,26 +196,75 @@ export default function LibrarySidebar({
               <Upload className="h-8 w-8 text-primary" />
             </div>
             <p className="text-sm font-medium text-foreground mb-2">No documents yet</p>
-            <p className="text-xs text-muted-foreground mb-6 max-w-[200px]">
-              Upload PDFs to build your research library
+            <p className="text-xs text-muted-foreground max-w-[200px]">
+              Use <strong>File → Upload Documents</strong> or <strong>File → Import BibTeX/RIS</strong> in the menu bar to add documents.
             </p>
-            <div className="w-full space-y-2 text-left">
-              <div className="flex items-start gap-2 text-xs text-muted-foreground">
-                <span className="text-accent mt-0.5">•</span>
-                <span>Drag & drop files</span>
-              </div>
-              <div className="flex items-start gap-2 text-xs text-muted-foreground">
-                <span className="text-accent mt-0.5">•</span>
-                <span>Import from BibTeX</span>
-              </div>
-              <div className="flex items-start gap-2 text-xs text-muted-foreground">
-                <span className="text-accent mt-0.5">•</span>
-                <span>Auto-extract entities</span>
-              </div>
-            </div>
           </div>
         ) : (
           <>
+            {/* Discovery Sessions */}
+            <div className="mb-3">
+              <button
+                onClick={() => setDiscoverySessionsOpen(!discoverySessionsOpen)}
+                className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground"
+              >
+                {discoverySessionsOpen ? (
+                  <ChevronDown className="h-3 w-3" />
+                ) : (
+                  <ChevronRight className="h-3 w-3" />
+                )}
+                <FlaskConical className="h-3 w-3 text-orange-500" />
+                Discovery Sessions
+                {onStartDiscovery && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onStartDiscovery();
+                    }}
+                    className="ml-auto rounded p-0.5 text-orange-500 hover:bg-orange-500/10"
+                    title="Start new discovery session"
+                  >
+                    <Plus className="h-3 w-3" />
+                  </button>
+                )}
+              </button>
+              {discoverySessionsOpen && (
+                <div className="mt-0.5 space-y-0.5 pl-2">
+                  {sessionList.length === 0 ? (
+                    <p className="px-2 py-2 text-[10px] text-muted-foreground italic">
+                      No sessions yet. Click [+] to start.
+                    </p>
+                  ) : (
+                    sessionList.map((session) => (
+                      <div
+                        key={session.sessionId}
+                        onClick={() => onOpenDiscoverySession?.(session.sessionId, session.sessionName)}
+                        className="group flex cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-muted-foreground transition-all hover:bg-surface hover:text-foreground border border-transparent hover:border-orange-500/30"
+                      >
+                        <FlaskConical className="h-3 w-3 text-orange-500 shrink-0" />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-xs font-medium">{session.sessionName}</p>
+                          <p className="text-[10px] opacity-60">
+                            {new Date(session.createdAt).toLocaleDateString()}
+                            <span className="ml-2 inline-flex items-center gap-1">
+                              {session.status === 'running' && (
+                                <span className="rounded-full bg-orange-500/20 px-1.5 py-0.5 text-[9px] font-medium text-orange-500">
+                                  Running
+                                </span>
+                              )}
+                              {session.status === 'complete' && (
+                                <CheckCircle2 className="h-2.5 w-2.5 text-emerald-400" />
+                              )}
+                            </span>
+                          </p>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+
             {/* Smart Groups */}
             {Object.keys(fileGroups).length > 1 && !searchQuery && (
               <div className="mb-1">
@@ -327,58 +353,6 @@ export default function LibrarySidebar({
             </div>
           </>
         )}
-      </div>
-
-      {/* Upload Area */}
-      <div className="shrink-0 border-t border-border p-3">
-        <label
-          className={`flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-border p-2.5 transition-all hover:border-primary/50 hover:bg-primary/5 ${
-            uploading ? 'pointer-events-none opacity-50' : ''
-          }`}
-        >
-          <input
-            ref={fileInputRef}
-            type="file"
-            className="hidden"
-            onChange={handleFileUpload}
-            accept=".pdf,.txt,.docx,.doc"
-            multiple
-            disabled={uploading}
-          />
-          {uploading ? (
-            <Loader2 className="h-4 w-4 animate-spin text-primary" />
-          ) : (
-            <Upload className="h-4 w-4 text-primary" />
-          )}
-          <span className="text-xs font-medium text-muted-foreground">
-            {uploading ? 'Uploading...' : 'Upload Documents'}
-          </span>
-        </label>
-
-        {/* Import BibTeX/RIS */}
-        <label
-          className={`flex cursor-pointer items-center gap-2.5 rounded-lg border border-dashed border-border bg-surface px-3 py-2.5 transition-all ${
-            uploading
-              ? 'cursor-not-allowed opacity-50'
-              : 'hover:border-accent/40 hover:bg-accent/5'
-          }`}
-        >
-          <input
-            type="file"
-            className="hidden"
-            accept=".bib,.ris"
-            disabled={uploading}
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) handleImport(file);
-              e.target.value = '';
-            }}
-          />
-          <FileDown className="h-4 w-4 text-accent" />
-          <span className="text-xs font-medium text-muted-foreground">
-            Import BibTeX/RIS
-          </span>
-        </label>
       </div>
     </div>
   );

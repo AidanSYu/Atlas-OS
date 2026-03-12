@@ -36,7 +36,9 @@ export default function ContextEngine({
   suggestions,
   isProcessing,
 }: ContextEngineProps) {
-  const { librarianMessages, cortexMessages } = useChatStore();
+  const activeThread = useChatStore((s) => s.threads.find((t) => t.id === s.activeThreadId) ?? null);
+  const librarianMessages = activeThread?.messages ?? [];
+  const cortexMessages = activeThread?.messages ?? [];
   const { selectedNodeId, nodes, links, focusedNodeId } = useGraphStore();
 
   // Phase 4: Proactive context state

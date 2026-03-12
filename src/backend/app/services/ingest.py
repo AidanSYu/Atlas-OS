@@ -63,12 +63,9 @@ class IngestionService:
         # Thread pool for CPU-bound operations (PDF parsing, etc.)
         self.executor = ThreadPoolExecutor(max_workers=4)
 
-        # Initialize GLiNER
-        self.gliner_model = self._load_gliner_model()
-        if self.gliner_model is None:
-            raise RuntimeError(
-                "GLiNER model is required for ingestion. Fix the model install/config and retry."
-            )
+        # GLiNER is loaded lazily on first ingest to keep startup fast.
+        # Access via self.gliner_model property which triggers the load.
+        self._gliner_model = None
 
         # Phase B2: Docling VLM parser (lazy-loaded, optional)
         self.docling_parser = None
@@ -97,6 +94,22 @@ class IngestionService:
         )
 
         logger.info("IngestionService initialized (embedded Qdrant + SQLite + BM25)")
+
+    @property
+    def gliner_model(self):
+        """Lazy-load GLiNER on first access (only needed during actual ingestion)."""
+        if self._gliner_model is None:
+            self._gliner_model = self._load_gliner_model()
+            if self._gliner_model is None:
+                raise RuntimeError(
+                    "GLiNER model is required for ingestion. Fix the model install/config and retry."
+                )
+        return self._gliner_model
+
+    @gliner_model.setter
+    def gliner_model(self, value):
+        """Allow direct assignment (e.g., for testing or manual injection)."""
+        self._gliner_model = value
 
     def _load_gliner_model(self):
         """Load GLiNER: try ONNX if available, else PyTorch."""
@@ -173,7 +186,7 @@ class IngestionService:
             return ('unknown', 'text/plain')
 
     async def ingest_document(
-        self, file_path: str, filename: str, project_id: Optional[str] = None
+        self, file_path: str, filename: str, project_id: Optional[str] = None, predefined_doc_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Main ingestion pipeline.
@@ -182,6 +195,7 @@ class IngestionService:
             file_path: Path to the document file
             filename: Original filename
             project_id: Optional project to scope this document to
+            predefined_doc_id: Optional pre-generated doc_id from frontend routing
 
         Returns:
             Summary of ingestion with statistics
@@ -196,39 +210,60 @@ class IngestionService:
             # Determine file type and MIME type
             file_type, mime_type = self._get_file_type_and_mime(filename)
 
-            # 1. Check for duplicate
-            file_hash = self._calculate_hash(file_path)
-            file_size = Path(file_path).stat().st_size
+            if predefined_doc_id:
+                # Document already registered
+                doc_id = predefined_doc_id
+                document = session.query(Document).filter(Document.id == doc_id).first()
+                if not document:
+                    file_hash = self._calculate_hash(file_path)
+                    file_size = Path(file_path).stat().st_size
+                    document = Document(
+                        id=doc_id,
+                        filename=filename,
+                        file_hash=file_hash,
+                        file_path=file_path,
+                        file_size=file_size,
+                        mime_type=mime_type,
+                        status="processing",
+                        project_id=project_id,
+                        uploaded_at=datetime.utcnow(),
+                    )
+                    session.add(document)
+                    session.commit()
+            else:
+                # 1. Check for duplicate
+                file_hash = self._calculate_hash(file_path)
+                file_size = Path(file_path).stat().st_size
 
-            dup_query = session.query(Document).filter(Document.file_hash == file_hash)
-            if project_id:
-                dup_query = dup_query.filter(Document.project_id == project_id)
-            existing_doc = dup_query.first()
+                dup_query = session.query(Document).filter(Document.file_hash == file_hash)
+                if project_id:
+                    dup_query = dup_query.filter(Document.project_id == project_id)
+                existing_doc = dup_query.first()
 
-            if existing_doc:
-                logger.info(f"Skipping duplicate: {filename}")
-                return {
-                    "status": "duplicate",
-                    "doc_id": str(existing_doc.id),
-                    "message": f"Document already exists as {existing_doc.filename}",
-                }
+                if existing_doc:
+                    logger.info(f"Skipping duplicate: {filename}")
+                    return {
+                        "status": "duplicate",
+                        "doc_id": str(existing_doc.id),
+                        "message": f"Document already exists as {existing_doc.filename}",
+                    }
 
-            # Create new document
-            doc_id = str(uuid.uuid4())
-            document = Document(
-                id=doc_id,
-                filename=filename,
-                file_hash=file_hash,
-                file_path=file_path,
-                file_size=file_size,
-                mime_type=mime_type,
-                status="processing",
-                project_id=project_id,
-                uploaded_at=datetime.utcnow(),
-            )
-            session.add(document)
-            session.commit()
-            logger.info(f"Document created: {filename} (ID: {doc_id})")
+                # Create new document
+                doc_id = str(uuid.uuid4())
+                document = Document(
+                    id=doc_id,
+                    filename=filename,
+                    file_hash=file_hash,
+                    file_path=file_path,
+                    file_size=file_size,
+                    mime_type=mime_type,
+                    status="processing",
+                    project_id=project_id,
+                    uploaded_at=datetime.utcnow(),
+                )
+                session.add(document)
+                session.commit()
+                logger.info(f"Document created: {filename} (ID: {doc_id})")
 
             # 2. Extract text from document
             t0_extract = time.perf_counter()

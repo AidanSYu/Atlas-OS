@@ -209,6 +209,151 @@ class GraphService:
         except Exception:
             pass
 
+    def create_or_update_feedback_node(
+        self,
+        hit_id: str,
+        epoch_id: str,
+        result_name: str,
+        result_value: float,
+        unit: str,
+        passed: bool,
+        notes: str,
+        smiles: Optional[str] = None,
+        project_id: Optional[str] = None,
+    ) -> List[str]:
+        """Create or update a knowledge graph node with bioassay feedback.
+
+        Args:
+            hit_id: The candidate/hit ID
+            epoch_id: The epoch ID
+            result_name: Name of the bioassay result (e.g., "IC50")
+            result_value: Numeric result value
+            unit: Unit of measurement (e.g., "μM")
+            passed: Whether the test passed
+            notes: Additional notes
+            smiles: Optional SMILES string for the compound
+            project_id: Optional project ID for scoping
+
+        Returns:
+            List of updated/created node IDs
+        """
+        from app.core.database import Document
+
+        session = get_session()
+        updated_nodes = []
+
+        try:
+            # Try to find an existing node matching the hit_id or SMILES
+            existing_node = None
+
+            # First, try to find by hit_id in properties
+            nodes_by_hit = (
+                session.query(Node)
+                .filter(Node.properties.contains({"hit_id": hit_id}))
+                .all()
+            )
+            if nodes_by_hit:
+                existing_node = nodes_by_hit[0]
+            elif smiles:
+                # Try to find by SMILES
+                nodes_by_smiles = (
+                    session.query(Node)
+                    .filter(Node.properties.contains({"smiles": smiles}))
+                    .all()
+                )
+                if nodes_by_smiles:
+                    existing_node = nodes_by_smiles[0]
+
+            if existing_node:
+                # Update existing node
+                props = existing_node.properties or {}
+                feedback_entry = {
+                    "result_name": result_name,
+                    "result_value": result_value,
+                    "unit": unit,
+                    "passed": passed,
+                    "notes": notes,
+                    "epoch_id": epoch_id,
+                    "timestamp": asyncio.get_running_loop().time() if asyncio.get_event_loop().is_running() else 0,
+                }
+
+                # Initialize feedback_history if not present
+                if "feedback_history" not in props:
+                    props["feedback_history"] = []
+
+                props["feedback_history"].append(feedback_entry)
+                props["latest_feedback"] = feedback_entry
+
+                existing_node.properties = props
+                session.commit()
+                updated_nodes.append(str(existing_node.id))
+            else:
+                # Create a new node
+                # Need a document_id - use a placeholder or find/create a discovery document
+                # For feedback nodes, we'll use a special document ID pattern
+                import uuid
+                from datetime import datetime
+
+                node_id = str(uuid.uuid4())
+
+                # Use a placeholder document_id - in production this might be
+                # associated with a special "discovery" document
+                placeholder_doc_id = f"discovery_{project_id or 'global'}"
+
+                # Check if we have a document with this ID, otherwise use any
+                doc = session.query(Document).filter(Document.id == placeholder_doc_id).first()
+                if not doc:
+                    # Use the first available document or create association later
+                    doc = session.query(Document).first()
+
+                document_id = doc.id if doc else placeholder_doc_id
+
+                new_node = Node(
+                    id=node_id,
+                    label=hit_id,  # Use hit_id as the label
+                    document_id=document_id,
+                    properties={
+                        "hit_id": hit_id,
+                        "epoch_id": epoch_id,
+                        "smiles": smiles,
+                        "name": f"Candidate {hit_id[:8]}",
+                        "result_name": result_name,
+                        "result_value": result_value,
+                        "unit": unit,
+                        "passed": passed,
+                        "notes": notes,
+                        "feedback_history": [{
+                            "result_name": result_name,
+                            "result_value": result_value,
+                            "unit": unit,
+                            "passed": passed,
+                            "notes": notes,
+                            "epoch_id": epoch_id,
+                            "timestamp": datetime.utcnow().isoformat(),
+                        }],
+                        "latest_feedback": {
+                            "result_name": result_name,
+                            "result_value": result_value,
+                            "unit": unit,
+                            "passed": passed,
+                            "notes": notes,
+                            "epoch_id": epoch_id,
+                            "timestamp": datetime.utcnow().isoformat(),
+                        },
+                    },
+                )
+                session.add(new_node)
+                session.commit()
+                updated_nodes.append(node_id)
+
+            return updated_nodes
+
+        except Exception as e:
+            session.rollback()
+            raise e
+        finally:
+            session.close()
+
     def _node_to_dict(self, node: Node) -> Dict[str, Any]:
         """Convert Node ORM object to dictionary."""
         props = node.properties or {}
