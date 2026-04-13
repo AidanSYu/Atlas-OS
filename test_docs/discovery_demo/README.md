@@ -1,33 +1,37 @@
-# Discovery Demo Corpus
+# Discovery Demo Corpus: Xyloside GAG Primers
 
-This folder contains a realistic mock document set for Discovery Engine demos.
+Upload the `.txt` files in this folder to a project, then start a Discovery session.
 
-## Upload Set
+## Demo Prompts (pick one)
 
-Upload the `.txt` files in this folder to a single project before starting a Discovery session.
+**Prompt 1 (recommended - triggers full pipeline):**
+> Discover novel xyloside-based GAG primers for anti-fibrotic applications. Use the prior campaign data to avoid known liabilities, prioritize CS-selective scaffolds, and rank by a composite of safety, drug-likeness, and synthesis feasibility.
 
-## Demo Goal
+**Prompt 2 (shorter, still effective):**
+> Design xyloside GAG primer candidates with clean ADMET, SA score under 6, and no PAINS alerts. Exclude nitro aromatics and flat polyaromatics.
 
-Use a prompt like:
+**Prompt 3 (exploratory):**
+> What xyloside scaffolds balance GAG priming potency with low hERG risk? Generate candidates and rank them.
 
-`Find orally bioavailable KRAS G12C inhibitor candidates with improved safety over first-pass scaffolds.`
+## What the pipeline will do
 
-The corpus is designed to drive coordinator extraction of:
+The coordinator reads these docs and extracts: domain (organic_chemistry), scaffold type (xyloside), property constraints, safety exclusions, and success metrics. Then the executor runs the full plugin chain:
 
-- domain (`organic_chemistry`)
-- target (`KRAS G12C`, switch-II pocket)
-- constraints (MW, LogP, TPSA, hERG, CYP3A4, solubility)
-- exclusions (naphthalene-heavy cores, aniline nitro motifs)
-- success metrics (biochemical IC50 and cellular EC50 thresholds)
+1. enumerate_fragments (xyloside preset - 21 built-in fragments)
+2. standardize_smiles (canonicalize + deduplicate)
+3. predict_properties (MW, LogP, TPSA, QED, Lipinski)
+4. check_toxicity (PAINS + structural alerts)
+5. score_synthesizability (SA score)
+6. predict_admet (hERG, DILI, Caco2, CYP3A4)
+7. plan_synthesis (retrosynthesis routes)
+8. evaluate_strategy (route feasibility ranking)
 
 ## Files
 
-- `target_brief_kras_g12c.txt`
-- `prior_campaign_notes.txt`
-- `admet_alerts_and_exclusions.txt`
-- `medicinal_chemistry_hypotheses.txt`
-- `assay_protocol_summary.txt`
-- `synthesis_and_supply_constraints.txt`
-- `literature_signals.txt`
-- `session_start_prompt_examples.txt`
-
+- `target_brief_xyloside_gag.txt` - Project brief and constraints
+- `prior_campaign_results.txt` - XYL-Alpha-01 results and lessons
+- `admet_and_safety_guide.txt` - ADMET triage rules and exclusions
+- `medicinal_chemistry_hypotheses.txt` - Design hypotheses for next cycle
+- `literature_review_gag_priming.txt` - Published findings on xyloside GAG primers
+- `synthesis_constraints.txt` - Route complexity and supply constraints
+- `assay_protocols.txt` - Screening assays and decision tree
