@@ -8,11 +8,23 @@ import { getApiBase } from '@/lib/api';
 import { streamSSE, type NormalizedEvent } from '@/lib/stream-adapter';
 import {
   useDiscoveryConversation,
+  type SessionConversation,
   type DiscoveryMessage,
   type PlanData,
   type ToolData,
   type AnalysisData,
 } from '@/stores/discoveryConversationStore';
+
+const EMPTY_CONV: SessionConversation = {
+  sessionId: '',
+  messages: [],
+  stage: 'setup',
+  isStreaming: false,
+  pendingPlan: null,
+  candidates: [],
+  pipelineRuns: [],
+  activeRunId: null,
+};
 import { PlanCard } from './PlanCard';
 import { PipelineRunBlock } from './PipelineRunBlock';
 import { ResultsSummary } from './ResultsSummary';
@@ -38,7 +50,7 @@ export function DiscoveryChat({
   // Track the active pipeline run while it's executing
   const currentRunIdRef = useRef<string | null>(null);
 
-  const conv = useDiscoveryConversation((s) => s.getOrCreate(sessionId));
+  const conv = useDiscoveryConversation((s) => s.conversations[sessionId]) ?? EMPTY_CONV;
   const addMessage = useDiscoveryConversation((s) => s.addMessage);
   const updateMessage = useDiscoveryConversation((s) => s.updateMessage);
   const setStreaming = useDiscoveryConversation((s) => s.setStreaming);
@@ -315,14 +327,14 @@ export function DiscoveryChat({
         });
       }
       // Start a new pipeline run group and collapse older ones
-      const iteration = conv.pipelineRuns.length + 1;
+      const iteration = (conv.pipelineRuns?.length ?? 0) + 1;
       const runId = startPipelineRun(sessionId, iteration);
       currentRunIdRef.current = runId;
       collapseOldRuns(sessionId);
       setPendingPlan(sessionId, null);
     }
     sendMessage('', 'accept_plan');
-  }, [sessionId, conv.pendingPlan, conv.messages, conv.pipelineRuns.length,
+  }, [sessionId, conv.pendingPlan, conv.messages, conv.pipelineRuns?.length,
       sendMessage, updateMessage, setPendingPlan, startPipelineRun, collapseOldRuns]);
 
   const handleRejectPlan = useCallback(() => {

@@ -55,7 +55,7 @@ type RightTab = 'results' | 'files' | 'plugins';
 export function DiscoveryWorkspaceTab({ sessionId, projectId }: DiscoveryWorkspaceTabProps) {
   const session = useDiscoveryStore((s) => s.sessions[sessionId]);
   // Read candidates from the conversation store — populated when pipeline_complete fires
-  const storeCandidates = useDiscoveryConversation((s) => s.getOrCreate(sessionId).candidates);
+  const storeCandidates = useDiscoveryConversation((s) => s.conversations[sessionId]?.candidates);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [rightTab, setRightTab] = useState<RightTab>('results');
@@ -154,7 +154,7 @@ export function DiscoveryWorkspaceTab({ sessionId, projectId }: DiscoveryWorkspa
   }, [refreshSessionFiles]);
 
   // Use candidates from conversation store (single source of truth)
-  const candidates = storeCandidates;
+  const candidates = storeCandidates ?? [];
 
   if (!session) {
     return (
@@ -222,8 +222,8 @@ export function DiscoveryWorkspaceTab({ sessionId, projectId }: DiscoveryWorkspa
         {/* Tab bar */}
         <div className="flex h-10 shrink-0 border-b border-border bg-surface/30">
           {([
-            { key: 'results' as RightTab, label: 'Results', icon: Database, count: candidates.length },
-            { key: 'files' as RightTab, label: 'Files', icon: FileText, count: session.generatedFiles.length },
+            { key: 'results' as RightTab, label: 'Results', icon: Database, count: candidates?.length ?? 0 },
+            { key: 'files' as RightTab, label: 'Files', icon: FileText, count: session.generatedFiles?.length ?? 0 },
             { key: 'plugins' as RightTab, label: 'Plugins', icon: Puzzle },
           ]).map(({ key, label, icon: Icon, count }) => (
             <button
@@ -320,13 +320,13 @@ export function DiscoveryWorkspaceTab({ sessionId, projectId }: DiscoveryWorkspa
           {/* Files tab */}
           {rightTab === 'files' && (
             <div className="p-2">
-              {session.generatedFiles.length === 0 ? (
+              {(session.generatedFiles?.length ?? 0) === 0 ? (
                 <p className="text-xs text-muted-foreground italic text-center py-6">
                   No files generated yet. Complete setup to create session files.
                 </p>
               ) : (
                 <div className="space-y-1">
-                  {session.generatedFiles.map((file, idx) => {
+                  {(session.generatedFiles ?? []).map((file, idx) => {
                     const isViewable = /\.(md|json|txt|csv|py|log)$/i.test(file);
                     return (
                       <button

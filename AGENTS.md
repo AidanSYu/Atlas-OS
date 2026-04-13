@@ -4,7 +4,7 @@
 
 ## Project Overview
 
-**Atlas 2.0** (codename: ContAInuum) is an AI-native knowledge management desktop application that builds a continuous knowledge layer beneath an AI model. It is a **standalone Windows desktop application** powered by a Multi-Agent LangGraph Architecture.
+**Atlas** (Product of ContAInuum) is an AI-native knowledge management desktop application that builds a continuous knowledge layer beneath an AI model. It is a **standalone Windows desktop application** powered by a Multi-Agent LangGraph Architecture.
 
 **Core Philosophy**: "The AI does not know things. It queries a living knowledge substrate."
 

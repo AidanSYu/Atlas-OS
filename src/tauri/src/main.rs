@@ -131,14 +131,38 @@ fn main() {
                 log::info!("App data directory: {:?}", data_dir);
             }
 
-            // Auto-start backend sidecar (no need to start Postgres or Qdrant)
             let app_handle = app.handle();
             tauri::async_runtime::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-
-                match start_backend(app_handle.clone(), app_handle.state::<SidecarState>()).await {
-                    Ok(msg) => log::info!("{}", msg),
-                    Err(e) => log::error!("Failed to start backend: {}", e),
+                #[cfg(debug_assertions)]
+                {
+                    // Dev mode: never launch sidecar — wait for `python run_server.py` instead.
+                    log::info!("Dev mode: waiting for external Python backend on http://127.0.0.1:8000");
+                    log::info!("Run: .\\scripts\\dev\\run_backend.ps1");
+                    let mut ready = false;
+                    for i in 1..=60 {
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        if check_backend_health().await {
+                            log::info!("Backend ready after {}s", i);
+                            ready = true;
+                            break;
+                        }
+                        if i % 10 == 0 {
+                            log::warn!("Still waiting for backend... ({}s elapsed)", i);
+                        }
+                    }
+                    if !ready {
+                        log::error!("Backend not found after 60s. Start it with: .\\scripts\\dev\\run_backend.ps1");
+                    }
+                    let _ = app_handle; // suppress unused warning
+                }
+                #[cfg(not(debug_assertions))]
+                {
+                    // Release mode: auto-launch the bundled sidecar.
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    match start_backend(app_handle.clone(), app_handle.state::<SidecarState>()).await {
+                        Ok(msg) => log::info!("{}", msg),
+                        Err(e) => log::error!("Failed to start backend: {}", e),
+                    }
                 }
             });
 

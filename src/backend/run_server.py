@@ -5,6 +5,9 @@ This is the main entry point for the PyInstaller-bundled backend.
 It starts the FastAPI server with uvicorn.
 """
 import os
+# Force disable hugging face symlinks to prevent WinError 1314 before any imports happen
+os.environ["HF_HUB_DISABLE_SYMLINKS"] = "1"
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 import sys
 import logging
 from pathlib import Path
