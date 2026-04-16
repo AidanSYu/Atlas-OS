@@ -1,0 +1,27 @@
+{
+  "schema_version": "1.0",
+  "name": "predict_admet",
+  "version": "0.1.0",
+  "description": "Predict ADMET risks such as hERG, DILI, Caco-2 permeability, and CYP3A4 inhibition.",
+  "entry_point": "wrapper.py",
+  "priority": 54,
+  "tags": ["chemistry", "admet", "prediction"],
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "smiles_list": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "List of SMILES strings for ADMET prediction."
+      }
+    },
+    "required": ["smiles_list"]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "predictions": {"type": "array", "items": {"type": "object"}},
+      "summary": {"type": "string"}
+    }
+  }
+}

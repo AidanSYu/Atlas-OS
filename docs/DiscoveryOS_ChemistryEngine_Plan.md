@@ -912,7 +912,7 @@ DELETE /api/discovery/{session_id}/jobs/{job_id}
 
 **File:** `src/backend/app/services/agents/pipeline_planner.py`
 
-The Pipeline Planner is a LangGraph node that receives `session_memory.json` and returns a typed `PipelinePlan` JSON. It uses DeepSeek (`orchestrate_constrained`) for reasoning.
+The Pipeline Planner described below is legacy design material from before the Atlas Framework migration. The current production architecture uses the single llama-cpp Orchestrator plus core tools and optional plugins instead of LangGraph nodes.
 
 ### PipelinePlan Schema
 

@@ -1,0 +1,29 @@
+{
+  "name": "manufacturing",
+  "description": "Prometheus — intelligent manufacturing vertical",
+  "edge_types": [
+    "ASSEMBLED_ON",
+    "SOLDERED_TO",
+    "TESTED_BY",
+    "PART_OF_BOM",
+    "SUPPLIED_BY",
+    "CALIBRATED_AT",
+    "FAILED_AT",
+    "REPLACED_WITH",
+    "PROCESSED_IN",
+    "BATCH_CONTAINS",
+    "INSPECTED_BY"
+  ],
+  "entity_labels": [
+    "Component",
+    "Equipment",
+    "Sensor",
+    "Board",
+    "Material",
+    "Process",
+    "Batch",
+    "Station",
+    "Defect",
+    "Supplier"
+  ]
+}

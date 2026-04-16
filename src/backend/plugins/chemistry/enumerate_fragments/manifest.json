@@ -1,0 +1,38 @@
+{
+  "schema_version": "1.0",
+  "name": "enumerate_fragments",
+  "version": "0.1.0",
+  "description": "Generate candidate molecules by combining a scaffold template with fragment libraries or named presets.",
+  "entry_point": "wrapper.py",
+  "priority": 46,
+  "tags": ["chemistry", "enumeration", "generation"],
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "scaffold_name": {
+        "type": "string",
+        "description": "Named scaffold preset."
+      },
+      "template": {
+        "type": "string",
+        "description": "Custom SMILES template with an {attachment} slot."
+      },
+      "fragments": {
+        "type": "array",
+        "description": "Fragment SMILES list or [name, smiles] pairs."
+      },
+      "max_candidates": {
+        "type": "integer",
+        "description": "Maximum number of generated candidates."
+      }
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "molecules": {"type": "array", "items": {"type": "object"}},
+      "smiles_list": {"type": "array", "items": {"type": "string"}},
+      "summary": {"type": "string"}
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "schema_version": "1.0",
+  "name": "evaluate_strategy",
+  "version": "0.1.0",
+  "description": "Score retrosynthesis routes for feasibility, difficulty, and likely bottlenecks.",
+  "entry_point": "wrapper.py",
+  "priority": 44,
+  "tags": ["chemistry", "strategy", "synthesis"],
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "routes": {
+        "type": "array",
+        "items": {"type": "object"},
+        "description": "List of route dictionaries to evaluate."
+      }
+    },
+    "required": ["routes"]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "valid": {"type": "boolean"},
+      "routes_evaluated": {"type": "integer"},
+      "recommendation": {"type": "string"},
+      "scored_routes": {"type": "array", "items": {"type": "object"}}
+    }
+  }
+}

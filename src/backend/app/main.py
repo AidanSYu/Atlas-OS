@@ -1,13 +1,18 @@
 """Main FastAPI application entry point (Embedded Desktop Sidecar)."""
 import asyncio
-from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 import logging
 
-from app.api.routes import router
-from app.core.database import init_db
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import JSONResponse
+
+from app.api.config_routes import router as config_router
+from app.api.data_routes import router as data_router
+from app.atlas_plugin_system import get_tool_catalog
+from app.api.framework_routes import router as framework_router
 from app.core.config import settings
+from app.core.database import init_db
 
 logger = logging.getLogger(__name__)
 
@@ -17,8 +22,11 @@ logger.info("SQLite database initialized successfully")
 
 
 app = FastAPI(
-    title="Atlas API - Agentic RAG Knowledge Engine",
-    description="Embedded desktop sidecar: SQLite + Qdrant in-process + Two-Brain Swarm",
+    title="Atlas Framework API",
+    description=(
+        "Embedded desktop sidecar: offline-first research operating system powered "
+        "by a single local orchestrator, hybrid RAG substrate, and optional plugins."
+    ),
     version="2.0.0-sidecar",
 )
 logger.info("FastAPI app created")
@@ -40,8 +48,6 @@ app.add_middleware(
     allow_headers=["Content-Type", "Authorization"],
 )
 
-# GZip Compression - optimized for large JSON responses (Graph data)
-from fastapi.middleware.gzip import GZipMiddleware
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
@@ -59,55 +65,35 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
-# Include routes
-app.include_router(router)
+app.include_router(config_router)
+app.include_router(framework_router)
+app.include_router(data_router)
 logger.info("Routes included")
 
 
 @app.on_event("startup")
 async def startup_event():
-    """Application startup: server accepts requests immediately, then loads services in background.
-
-    Phase 1 (instant): Server is live and /health answers straight away.
-    Phase 2 (background task): Heavy ML service imports + LLM model loading.
-    """
-    logger.info("Atlas Sidecar starting up (SQLite + embedded Qdrant)")
+    """Application startup for the Atlas Framework backend."""
+    logger.info("Atlas Framework sidecar starting up")
     app.state.startup_complete = False
 
     async def _background_startup():
-        """Load all services and the default LLM model without blocking the event loop."""
+        """Warm the tool catalog without blocking the event loop."""
         try:
-            from app.api.routes import ensure_services
-            from app.services.llm import get_llm_service
-
-            logger.info("Initializing services (LLM, embeddings, GLiNER)...")
-            # Service constructors are lightweight now (GLiNER loads lazily on first ingest).
-            # Call directly on the event loop - no blocking I/O in __init__ paths.
-            ensure_services()
-            logger.info("All services initialized successfully")
-
-            # Load default LLM model with GPU acceleration
-            logger.info("Loading default LLM model with GPU acceleration...")
-            llm_service = get_llm_service()
-            model_name = await llm_service.initialize_default_model()
-            if model_name:
-                logger.info(f"Default model loaded: {model_name}")
-                status = llm_service.get_status()
-                logger.info(
-                    f"LLM Status - Active Model: {status.get('active_model')}, "
-                    f"Device: {status.get('device')}, GPU Layers: {status.get('gpu_layers')}"
-                )
-            else:
-                logger.warning("No model loaded at startup - LLM will be unavailable")
-
+            catalog = get_tool_catalog()
+            catalog.refresh()
+            logger.info(
+                "Atlas Framework tool catalog ready with %d core tool(s) and %d plugin(s)",
+                len(catalog.list_core_tools()),
+                len(catalog.list_plugins()),
+            )
             app.state.startup_complete = True
-            logger.info("Ready for inference")
-        except Exception as e:
-            logger.error(f"Background startup failed: {e}", exc_info=True)
-            logger.warning("Services will be initialized lazily on first request")
-            app.state.startup_complete = True  # Mark complete even on error so status is accurate
+            logger.info("Atlas Framework backend ready")
+        except Exception as exc:
+            logger.error("Background startup failed: %s", exc, exc_info=True)
+            logger.warning("Framework services will be initialized lazily on first request")
+            app.state.startup_complete = True
 
-    # Fire-and-forget: server is live instantly; models load in the background
     asyncio.create_task(_background_startup())
 
 

@@ -338,9 +338,6 @@ function mapRawEvent(eventType: string, data: any): NormalizedEvent {
       return { type: 'message', content: data.content || '' };
 
     case 'plan_proposed':
-      // #region agent log
-      fetch('http://127.0.0.1:7272/ingest/f7210b22-43a9-4e37-b68b-7a5242f3a0fe',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'93fd50'},body:JSON.stringify({sessionId:'93fd50',location:'stream-adapter.ts:337',message:'plan_proposed raw data.warnings',data:{rawWarnings:data.warnings,rawType:typeof data.warnings,isArray:Array.isArray(data.warnings)},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
-      // #endregion
       return {
         type: 'plan_proposed',
         planId: data.plan_id || '',

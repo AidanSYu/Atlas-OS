@@ -1,0 +1,60 @@
+{
+  "schema_version": "1.0",
+  "name": "physics_simulator",
+  "version": "1.0.0",
+  "description": "Physics surrogate model using neural operators (FNO) or PINN with MC-dropout uncertainty quantification and Mahalanobis OOD rejection. Predicts physics in milliseconds instead of hours-long CFD simulations.",
+  "entry_point": "wrapper.py",
+  "priority": 70,
+  "tags": ["physics", "surrogate", "neural-operator", "fno", "pinn", "simulation", "uq"],
+  "license": "Apache-2.0",
+  "optional_dependencies": ["torch", "neuraloperator", "numpy"],
+  "resource_requirements": {
+    "min_vram_mb": 1000,
+    "min_ram_mb": 2048,
+    "gpu_required": false,
+    "recommended_vram_mb": 4000
+  },
+  "self_test": "python -c \"from plugins.prometheus.physics_simulator.wrapper import PLUGIN; import asyncio; r=asyncio.run(PLUGIN.invoke({'mode':'self_test'})); assert r.get('valid', True)\"",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "mode": {
+        "type": "string",
+        "enum": ["predict", "train", "self_test"],
+        "description": "Operation mode."
+      },
+      "model_type": {
+        "type": "string",
+        "enum": ["fno", "pinn", "auto"],
+        "description": "Surrogate model type (default 'auto': FNO if neuraloperator installed, else PINN)."
+      },
+      "boundary_conditions": {
+        "type": "object",
+        "description": "Boundary conditions for the PDE."
+      },
+      "parameters": {
+        "type": "object",
+        "description": "PDE parameters (e.g. thermal diffusivity, initial conditions)."
+      },
+      "training_data": {
+        "type": "object",
+        "description": "Training pairs: {inputs: array, outputs: array}."
+      },
+      "n_mc_samples": {
+        "type": "integer",
+        "description": "Number of MC dropout forward passes for UQ (default 20)."
+      }
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "prediction": {"type": "array"},
+      "uncertainty": {"type": "array"},
+      "ood_score": {"type": "number"},
+      "ood_rejected": {"type": "boolean"},
+      "model_info": {"type": "object"},
+      "summary": {"type": "string"}
+    }
+  }
+}

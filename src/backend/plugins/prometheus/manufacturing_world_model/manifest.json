@@ -1,0 +1,77 @@
+{
+  "schema_version": "1.0",
+  "name": "manufacturing_world_model",
+  "version": "1.0.0",
+  "description": "Time-series forecasting, anomaly detection, and change-point analysis for manufacturing sensor data. Uses whichever local forecasting backend is installed (Chronos-2, TimesFM-2.5, Granite-TTM, MOMENT, or StatsForecast) and requires ruptures for changepoint analysis.",
+  "entry_point": "wrapper.py",
+  "priority": 72,
+  "tags": ["timeseries", "forecasting", "anomaly", "manufacturing", "predictive-maintenance"],
+  "license": "Apache-2.0",
+  "optional_dependencies": ["chronos-forecasting", "timesfm", "tsfm_public", "momentfm", "statsforecast", "pandas", "ruptures"],
+  "resource_requirements": {
+    "min_vram_mb": 0,
+    "min_ram_mb": 512,
+    "gpu_required": false,
+    "recommended_vram_mb": 2000
+  },
+  "self_test": "python -c \"from plugins.prometheus.manufacturing_world_model.wrapper import PLUGIN; import asyncio; r=asyncio.run(PLUGIN.invoke({'mode':'self_test'})); assert r.get('valid')\"",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "values": {
+        "type": "array",
+        "items": {"type": "number"},
+        "description": "Time-series values (e.g. temperature readings in chronological order)."
+      },
+      "timestamps": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Optional ISO-8601 timestamps aligned with values."
+      },
+      "horizon": {
+        "type": "integer",
+        "description": "Number of future steps to predict."
+      },
+      "backend": {
+        "type": "string",
+        "enum": ["chronos2", "timesfm25", "ttm", "moment", "stats", "auto"],
+        "description": "Forecasting backend to use. 'auto' tries backends in priority order and uses the first available."
+      },
+      "mode": {
+        "type": "string",
+        "enum": ["forecast", "anomaly", "changepoint", "full", "self_test"],
+        "description": "Operation mode: 'forecast' produces predictions, 'anomaly' scores historical points, 'changepoint' detects regime shifts, 'full' runs all three, 'self_test' runs built-in demo."
+      },
+      "confidence_level": {
+        "type": "number",
+        "description": "Confidence level for prediction intervals (default 0.9)."
+      }
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "valid": {"type": "boolean"},
+      "forecast": {
+        "type": "object",
+        "description": "Forecast results: median, lower, upper arrays."
+      },
+      "anomaly_scores": {
+        "type": "array",
+        "items": {"type": "number"},
+        "description": "Per-point anomaly z-scores on historical data."
+      },
+      "changepoints": {
+        "type": "array",
+        "items": {"type": "integer"},
+        "description": "Detected change-point indices in the input series."
+      },
+      "prediction_intervals": {
+        "type": "object",
+        "description": "Conformally calibrated prediction intervals."
+      },
+      "backend_used": {"type": "string"},
+      "summary": {"type": "string"}
+    }
+  }
+}

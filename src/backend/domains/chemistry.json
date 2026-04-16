@@ -1,0 +1,21 @@
+{
+  "name": "chemistry",
+  "description": "Drug discovery and medicinal chemistry vertical",
+  "edge_types": [
+    "INHIBITS",
+    "CLINICAL_TRIAL_FOR",
+    "TREATS",
+    "DIAGNOSES",
+    "AUTHORED_BY",
+    "PUBLISHED_IN",
+    "FUNDED_BY"
+  ],
+  "entity_labels": [
+    "Chemical",
+    "Drug",
+    "Target",
+    "Pathway",
+    "Assay",
+    "Disease"
+  ]
+}

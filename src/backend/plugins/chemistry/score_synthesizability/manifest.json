@@ -1,0 +1,27 @@
+{
+  "schema_version": "1.0",
+  "name": "score_synthesizability",
+  "version": "0.1.0",
+  "description": "Score synthetic accessibility (SA Score 1-10) for a set of SMILES strings.",
+  "entry_point": "wrapper.py",
+  "priority": 55,
+  "tags": ["chemistry", "synthesis", "rdkit"],
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "smiles_list": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "List of SMILES strings to score."
+      }
+    },
+    "required": ["smiles_list"]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "scores": {"type": "array", "items": {"type": "object"}},
+      "summary": {"type": "string"}
+    }
+  }
+}

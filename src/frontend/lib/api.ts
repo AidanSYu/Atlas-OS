@@ -243,6 +243,198 @@ export interface WorkspaceDraft {
   updated_at: number;
 }
 
+export interface FrameworkToolInfo {
+  name: string;
+  description: string;
+  priority: number;
+  input_schema: Record<string, any>;
+  output_schema: Record<string, any>;
+  tags: string[];
+  license?: string;
+  optional_dependencies?: string[];
+  artifacts?: string[];
+  resource_requirements?: Record<string, any>;
+  self_test?: string;
+  fallback_used?: string;
+  source: string;
+  source_type: string;
+  loaded: boolean;
+  load_error?: string | null;
+}
+
+export interface FrameworkStatusResponse {
+  status: string;
+  message: string;
+  plugin_dir: string;
+  orchestrator_model: string;
+  orchestrator_model_path?: string | null;
+  core_tool_count: number;
+  plugin_count: number;
+}
+
+export interface FrameworkCatalogResponse {
+  plugin_dir: string;
+  orchestrator_model: string;
+  core_tools: FrameworkToolInfo[];
+  plugins: FrameworkToolInfo[];
+  all_tools: string[];
+}
+
+export interface FrameworkRunResponse {
+  answer: string;
+  iterations: number;
+  model: string | null;
+  available_tools: string[];
+  trace: FrameworkRunTraceEntry[];
+}
+
+export interface FrameworkToolCallTrace {
+  name: string;
+  arguments: Record<string, any>;
+}
+
+export interface FrameworkRunTraceEntry {
+  iteration: number;
+  thinking?: string;
+  tool_calls?: FrameworkToolCallTrace[];
+  tool_results?: Array<Record<string, any>>;
+  final_answer?: string;
+  forced?: boolean;
+}
+
+export interface FrameworkPluginInvokeResponse {
+  plugin_name: string;
+  status: string;
+  summary: string;
+  result: Record<string, any>;
+}
+
+export interface FrameworkDependencyStatus {
+  package: string;
+  import_name: string;
+  available: boolean;
+}
+
+export interface FrameworkGpuDevice {
+  index: number;
+  name: string;
+  total_vram_mb: number;
+}
+
+export interface FrameworkMachineProfile {
+  platform: string;
+  python_version: string;
+  cpu_count: number;
+  total_ram_mb: number;
+  available_ram_mb: number;
+  torch_available: boolean;
+  cuda_available: boolean;
+  gpu_devices: FrameworkGpuDevice[];
+}
+
+export interface FrameworkResourceAssessment {
+  status: string;
+  blockers: string[];
+  advisories: string[];
+}
+
+export interface FrameworkPluginRuntimeInfo {
+  name: string;
+  description: string;
+  source: string;
+  source_type: string;
+  license: string;
+  loaded: boolean;
+  load_error?: string | null;
+  preflight_status: string;
+  blocking_issues: string[];
+  advisory_notes: string[];
+  dependency_statuses: FrameworkDependencyStatus[];
+  missing_dependencies: string[];
+  supports_self_test: boolean;
+  default_proof_arguments: Record<string, any>;
+  resource_assessment: FrameworkResourceAssessment;
+}
+
+export interface FrameworkRuntimeResponse {
+  status: string;
+  machine: FrameworkMachineProfile;
+  plugins: FrameworkPluginRuntimeInfo[];
+}
+
+export interface FrameworkPluginProofResponse {
+  plugin_name: string;
+  proof_status: string;
+  duration_ms: number;
+  summary: string;
+  arguments: Record<string, any>;
+  runtime: FrameworkPluginRuntimeInfo;
+  result: Record<string, any>;
+}
+
+export interface PrometheusDependencyStatus {
+  package: string;
+  import_name: string;
+  available: boolean;
+}
+
+export interface PrometheusPluginStatus {
+  name: string;
+  title: string;
+  description: string;
+  source: string;
+  source_type: string;
+  loaded: boolean;
+  load_error?: string | null;
+  status: string;
+  blocking_reason?: string | null;
+  capability_note?: string | null;
+  priority: number;
+  tags: string[];
+  license: string;
+  optional_dependencies: PrometheusDependencyStatus[];
+  fallback_used: string;
+  self_test: string;
+  resource_requirements: Record<string, any>;
+}
+
+export interface PrometheusScenarioInfo {
+  id: string;
+  plugin_name: string;
+  title: string;
+  subtitle: string;
+  description: string;
+  recommended: boolean;
+  proof_points: string[];
+  status: string;
+  blocking_reason?: string | null;
+  capability_note?: string | null;
+}
+
+export interface PrometheusDemoCatalogResponse {
+  framework: FrameworkStatusResponse;
+  plugins: PrometheusPluginStatus[];
+  scenarios: PrometheusScenarioInfo[];
+}
+
+export interface PrometheusDemoRunResponse {
+  scenario_id: string;
+  plugin_name: string;
+  title: string;
+  status: string;
+  duration_ms: number;
+  summary: string;
+  metrics: Record<string, any>;
+  result: Record<string, any>;
+}
+
+export interface PrometheusDemoBundleResponse {
+  started_at: string;
+  finished_at: string;
+  status: string;
+  scenario_results: PrometheusDemoRunResponse[];
+}
+
 // Phase 4: Context Engine types
 export interface PaperStructure {
   title: string;
@@ -440,10 +632,16 @@ export const api = {
     return `${API_BASE_URL}/files/${encodeURIComponent(docId)}`;
   },
 
-  // ---- Chat (Librarian RAG) ----
+  // ---- Grounded Chat (Librarian / Cortex) ----
 
-  async chat(query: string, projectId?: string, signal?: AbortSignal, stageContext?: Record<string, any> | null): Promise<ChatResponse> {
-    const payload: Record<string, any> = { query, project_id: projectId };
+  async chat(
+    query: string,
+    projectId?: string,
+    signal?: AbortSignal,
+    stageContext?: Record<string, any> | null,
+    mode: 'librarian' | 'cortex' = 'librarian',
+  ): Promise<ChatResponse> {
+    const payload: Record<string, any> = { query, project_id: projectId, mode };
     if (stageContext) payload.stage_context = stageContext;
     const response = await fetchWithTimeout(
       `${API_BASE_URL}/chat`,
@@ -1118,5 +1316,105 @@ export const api = {
       { signal: options?.signal, timeout: options?.timeout ?? 600_000 },
     );
   },
-};
 
+  // ---- Atlas Framework ----
+
+  async getFrameworkStatus(): Promise<FrameworkStatusResponse> {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/api/framework`);
+    return handleResponse(response);
+  },
+
+  async getFrameworkTools(): Promise<FrameworkCatalogResponse> {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/api/framework/tools`);
+    return handleResponse(response);
+  },
+
+  async runFramework(params: {
+    prompt: string;
+    project_id?: string;
+    session_id?: string;
+    max_iterations?: number;
+    conversation?: Array<{ role: string; content: string }>;
+  }, signal?: AbortSignal): Promise<FrameworkRunResponse> {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/api/framework/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+      signal,
+    }, CHAT_TIMEOUT);
+    return handleResponse(response);
+  },
+
+  async invokeFrameworkPlugin(
+    pluginName: string,
+    argumentsPayload: Record<string, any>,
+    context: Record<string, any> = {},
+  ): Promise<FrameworkPluginInvokeResponse> {
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/api/framework/plugins/${encodeURIComponent(pluginName)}/invoke`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ arguments: argumentsPayload, context }),
+      },
+      SWARM_TIMEOUT,
+    );
+    return handleResponse(response);
+  },
+
+  async getFrameworkRuntime(): Promise<FrameworkRuntimeResponse> {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/api/framework/runtime`);
+    return handleResponse(response);
+  },
+
+  async proveFrameworkPlugin(
+    pluginName: string,
+    payload: {
+      arguments?: Record<string, any>;
+      timeout_seconds?: number;
+    } = {},
+  ): Promise<FrameworkPluginProofResponse> {
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/api/framework/plugins/${encodeURIComponent(pluginName)}/proof`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          arguments: payload.arguments ?? {},
+          timeout_seconds: payload.timeout_seconds ?? 120,
+        }),
+      },
+      SWARM_TIMEOUT,
+    );
+    return handleResponse(response);
+  },
+
+  async getPrometheusDemoCatalog(): Promise<PrometheusDemoCatalogResponse> {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/api/framework/demos/prometheus`);
+    return handleResponse(response);
+  },
+
+  async runPrometheusDemoScenario(scenarioId: string): Promise<PrometheusDemoRunResponse> {
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/api/framework/demos/prometheus/run`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scenario_id: scenarioId }),
+      },
+      SWARM_TIMEOUT,
+    );
+    return handleResponse(response);
+  },
+
+  async runPrometheusDemoBundle(): Promise<PrometheusDemoBundleResponse> {
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/api/framework/demos/prometheus/run-all`,
+      {
+        method: 'POST',
+      },
+      SWARM_TIMEOUT,
+    );
+    return handleResponse(response);
+  },
+};

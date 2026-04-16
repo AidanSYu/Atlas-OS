@@ -697,9 +697,7 @@ class IngestionService:
         """Extract entities from all chunks in parallel."""
         node_ids_by_chunk: Dict[int, List[str]] = {}
         entity_labels = [
-            "Person", "Organization", "Location", "Concept",
-            "Method", "Chemical", "Date", "Event", "Work",
-            "Title", "Institution",
+            l.strip() for l in settings.GRAPH_ENTITY_LABELS.split(",") if l.strip()
         ]
 
         extraction_tasks = []
@@ -881,9 +879,7 @@ class IngestionService:
         """Extract entities using GLiNER model."""
         if labels is None:
             labels = [
-                "Person", "Organization", "Location", "Concept",
-                "Method", "Chemical", "Date", "Event", "Work",
-                "Title", "Institution",
+                l.strip() for l in settings.GRAPH_ENTITY_LABELS.split(",") if l.strip()
             ]
 
         if self.gliner_model is None:

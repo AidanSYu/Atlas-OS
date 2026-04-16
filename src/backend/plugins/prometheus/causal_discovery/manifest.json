@@ -1,0 +1,79 @@
+{
+  "schema_version": "1.0",
+  "name": "causal_discovery",
+  "version": "1.0.0",
+  "description": "Two-stage causal discovery pipeline: time-lagged causal graph inference via Tigramite PCMCI+, followed by symbolic equation discovery on parent sets via PySR. Includes intervention ranking via symbolic sensitivity analysis.",
+  "entry_point": "wrapper.py",
+  "priority": 75,
+  "license": "GPL-3.0",
+  "tags": ["causal", "discovery", "symbolic", "regression", "manufacturing"],
+  "optional_dependencies": ["tigramite", "pysr"],
+  "self_test": "python -c \"from plugins.prometheus.causal_discovery.wrapper import PLUGIN; import asyncio; r=asyncio.run(PLUGIN.invoke({'mode':'self_test'})); assert r.get('valid')\"",
+  "resource_requirements": {
+    "min_ram_mb": 512,
+    "gpu_required": false
+  },
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "data": {
+        "type": "array",
+        "items": {
+          "type": "array",
+          "items": {"type": "number"}
+        },
+        "description": "2D array of shape [T, N] — T time steps, N variables."
+      },
+      "variable_names": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Names for each of the N variables."
+      },
+      "target_variable": {
+        "oneOf": [
+          {"type": "string"},
+          {"type": "integer"}
+        ],
+        "description": "Target variable specified by name (string) or column index (integer)."
+      },
+      "max_lag": {
+        "type": "integer",
+        "default": 5,
+        "description": "Maximum time lag to test for causal relationships."
+      },
+      "mode": {
+        "type": "string",
+        "enum": ["discover", "equations", "full", "self_test"],
+        "default": "full",
+        "description": "Pipeline mode: 'discover' runs only PCMCI+, 'equations' runs only PySR (requires pre-computed parent sets), 'full' runs both stages plus intervention ranking, 'self_test' runs the full pipeline on built-in synthetic manufacturing data."
+      }
+    },
+    "required": ["mode"]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "causal_graph": {
+        "type": "object",
+        "description": "Adjacency structure with edge types and lag information from PCMCI+."
+      },
+      "parent_sets": {
+        "type": "object",
+        "description": "Mapping from each variable to its discovered causal parents with lag."
+      },
+      "equations": {
+        "type": "object",
+        "description": "Symbolic equations discovered by PySR for the target variable."
+      },
+      "intervention_ranking": {
+        "type": "array",
+        "items": {"type": "object"},
+        "description": "Variables ranked by absolute sensitivity (partial derivative magnitude) of the target equation."
+      },
+      "summary": {
+        "type": "string",
+        "description": "Human-readable summary of the full pipeline results."
+      }
+    }
+  }
+}

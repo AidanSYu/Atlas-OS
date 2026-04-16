@@ -13,16 +13,12 @@ const MODE_LABELS: Record<ChatMode, string> = {
   librarian: 'Librarian',
   cortex: 'Cortex',
   moe: 'MoE',
-  discovery: 'Discovery',
-  coordinator: 'Coordinator',
 };
 
 const MODE_COLORS: Record<ChatMode, string> = {
   librarian: 'text-blue-400 bg-blue-400/10 border-blue-400/20',
   cortex: 'text-purple-400 bg-purple-400/10 border-purple-400/20',
   moe: 'text-amber-400 bg-amber-400/10 border-amber-400/20',
-  discovery: 'text-emerald-400 bg-emerald-400/10 border-emerald-400/20',
-  coordinator: 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20',
 };
 
 // ---------------------------------------------------------------------------

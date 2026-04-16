@@ -1,9 +1,9 @@
 """
-Chat Service - Interface for chat functionality using bundled LLM.
+Chat Service - Grounded chat interface over the Atlas retrieval substrate.
 
-Production Desktop Sidecar: Uses bundled llama-cpp-python via RetrievalService.
+Production Desktop Sidecar: uses RetrievalService for document + graph-backed Q&A.
 """
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Literal
 
 from app.services.retrieval import RetrievalService
 
@@ -14,18 +14,28 @@ class ChatService:
     def __init__(self):
         self.retrieval_service = RetrievalService()
 
-    async def chat(self, user_question: str, project_id: Optional[str] = None) -> Dict[str, Any]:
+    async def chat(
+        self,
+        user_question: str,
+        project_id: Optional[str] = None,
+        mode: Literal["librarian", "cortex"] = "librarian",
+    ) -> Dict[str, Any]:
         """
-        Process a chat query using hybrid RAG retrieval.
+        Process a grounded chat query using hybrid RAG retrieval.
 
         Args:
             user_question: The user's question
             project_id: Optional project scope
+            mode: Chat persona. Both modes stay grounded to retrieval/graph context.
 
         Returns:
             Dict with answer, reasoning, citations, relationships, context_sources
         """
-        result = await self.retrieval_service.query_atlas(user_question, project_id=project_id)
+        result = await self.retrieval_service.query_atlas(
+            user_question,
+            project_id=project_id,
+            mode=mode,
+        )
         context = result.get("context") or {
             "vector_chunks": [],
             "graph_nodes": [],
@@ -45,7 +55,7 @@ class ChatService:
                     "source": metadata.get("filename", "Unknown"),
                     "doc_id": chunk.get("doc_id"),
                     "page": page if page is not None else 1,
-                    "excerpt": (chunk.get("text") or "")[:200]
+                    "text": (chunk.get("text") or "")[:200]
                     + ("..." if len(chunk.get("text", "")) > 200 else ""),
                 }
             )
@@ -77,7 +87,10 @@ class ChatService:
 
         return {
             "answer": answer,
-            "reasoning": f"Retrieved {len(vector_chunks)} text chunks and {len(graph_nodes)} graph nodes",
+            "reasoning": (
+                f"{mode.title()} reviewed {len(vector_chunks)} text chunks, "
+                f"{len(graph_nodes)} graph nodes, and {len(graph_edges)} graph edges."
+            ),
             "citations": citations,
             "relationships": relationships,
             "context_sources": {

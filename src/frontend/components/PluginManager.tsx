@@ -1,11 +1,10 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { api } from '@/lib/api';
+import { api, type FrameworkCatalogResponse, type FrameworkRuntimeResponse } from '@/lib/api';
 import {
   Cpu,
   Database,
-  Trash2,
   RefreshCw,
   Zap,
   ChevronDown,
@@ -14,6 +13,7 @@ import {
   Maximize2,
   X,
   AlertTriangle,
+  ShieldCheck,
 } from 'lucide-react';
 
 interface Plugin {
@@ -21,10 +21,12 @@ interface Plugin {
   description: string;
   loaded: boolean;
   available: boolean;
-  unavailable_reason?: string | null;
-  type: 'deterministic' | 'semantic';
-  input_schema: any;
-  output_schema: any;
+  preflightStatus: string;
+  unavailableReason?: string | null;
+  sourceType: string;
+  supportsSelfTest: boolean;
+  inputSchema: Record<string, any>;
+  outputSchema: Record<string, any>;
 }
 
 interface PluginManagerProps {
@@ -33,24 +35,49 @@ interface PluginManagerProps {
 
 export function PluginManager({ projectId: _projectId }: PluginManagerProps) {
   const [plugins, setPlugins] = useState<Plugin[]>([]);
-  const [orchestratorProvider, setOrchestratorProvider] = useState<string>('');
   const [orchestratorModel, setOrchestratorModel] = useState<string>('');
-  const [toolProvider, setToolProvider] = useState<string>('');
-  const [toolModel, setToolModel] = useState<string>('');
+  const [runtimeSummary, setRuntimeSummary] = useState<string>('');
   const [isLoading, setIsLoading] = useState(true);
   const [expandedPlugin, setExpandedPlugin] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [showAllModal, setShowAllModal] = useState(false);
 
+  const mapPlugins = (
+    catalog: FrameworkCatalogResponse,
+    runtime: FrameworkRuntimeResponse,
+  ): Plugin[] => {
+    const runtimeByName = new Map(runtime.plugins.map((plugin) => [plugin.name, plugin]));
+    return catalog.plugins.map((plugin) => {
+      const runtimePlugin = runtimeByName.get(plugin.name);
+      const blockingReason = runtimePlugin?.blocking_issues?.[0]
+        || runtimePlugin?.load_error
+        || plugin.load_error
+        || null;
+      return {
+        name: plugin.name,
+        description: plugin.description,
+        loaded: runtimePlugin?.loaded ?? plugin.loaded,
+        available: (runtimePlugin?.preflight_status ?? 'unverified') !== 'blocked',
+        preflightStatus: runtimePlugin?.preflight_status ?? 'unverified',
+        unavailableReason: blockingReason,
+        sourceType: plugin.source_type,
+        supportsSelfTest: runtimePlugin?.supports_self_test ?? false,
+        inputSchema: plugin.input_schema,
+        outputSchema: plugin.output_schema,
+      };
+    });
+  };
+
   const loadPlugins = async () => {
     setIsLoading(true);
     try {
-      const data = await api.getPlugins();
-      setPlugins(data.plugins);
-      setOrchestratorProvider(data.orchestrator_provider);
-      setOrchestratorModel(data.orchestrator_model);
-      setToolProvider(data.tool_provider);
-      setToolModel(data.tool_model);
+      const [catalog, runtime] = await Promise.all([
+        api.getFrameworkTools(),
+        api.getFrameworkRuntime(),
+      ]);
+      setPlugins(mapPlugins(catalog, runtime));
+      setOrchestratorModel(catalog.orchestrator_model || 'local');
+      setRuntimeSummary(`${runtime.plugins.length} plugin${runtime.plugins.length === 1 ? '' : 's'} tracked`);
     } catch (err) {
       console.error('Failed to load plugins:', err);
     } finally {
@@ -73,15 +100,6 @@ export function PluginManager({ projectId: _projectId }: PluginManagerProps) {
     return () => window.removeEventListener('keydown', onKey);
   }, [showAllModal]);
 
-  const handleUnload = async (pluginName: string) => {
-    try {
-      await api.unloadPlugin(pluginName);
-      await loadPlugins();
-    } catch (err) {
-      console.error('Failed to unload plugin:', err);
-    }
-  };
-
   const normalizedSearch = search.trim().toLowerCase();
   const visiblePlugins = plugins
     .filter((plugin) => {
@@ -89,7 +107,8 @@ export function PluginManager({ projectId: _projectId }: PluginManagerProps) {
       const searchable = [
         plugin.name,
         plugin.description,
-        plugin.type,
+        plugin.sourceType,
+        plugin.preflightStatus,
         plugin.available ? 'available' : 'unavailable',
       ].join(' ').toLowerCase();
       return searchable.includes(normalizedSearch);
@@ -115,11 +134,11 @@ export function PluginManager({ projectId: _projectId }: PluginManagerProps) {
             className={`h-2 w-2 rounded-full ${
               plugin.loaded ? 'bg-green-500' : plugin.available ? 'bg-amber-400' : 'bg-destructive'
             }`}
-            title={plugin.loaded ? 'Loaded' : plugin.available ? 'Available (not loaded)' : 'Unavailable'}
+            title={plugin.loaded ? 'Loaded' : plugin.available ? 'Available (lazy-loaded)' : 'Blocked'}
           />
           <span className="text-xs font-medium text-foreground">{plugin.name}</span>
           <span className="text-[10px] text-muted-foreground px-1.5 py-0.5 bg-accent/10 rounded">
-            {plugin.type}
+            {plugin.sourceType}
           </span>
           <span
             className={`text-[10px] px-1.5 py-0.5 rounded border ${
@@ -130,6 +149,12 @@ export function PluginManager({ projectId: _projectId }: PluginManagerProps) {
           >
             {plugin.available ? 'available' : 'unavailable'}
           </span>
+          {plugin.supportsSelfTest && (
+            <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border border-primary/30 bg-primary/10 text-primary">
+              <ShieldCheck className="h-3 w-3" />
+              proof
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-1">
           <button
@@ -146,19 +171,10 @@ export function PluginManager({ projectId: _projectId }: PluginManagerProps) {
             ) : (
               <>
                 <ChevronRight className="h-3 w-3" />
-                Schema
+                Details
               </>
             )}
           </button>
-          {plugin.loaded && (
-            <button
-              onClick={() => handleUnload(plugin.name)}
-              className="ml-2 p-1 rounded hover:bg-destructive/10 text-destructive transition-colors"
-              title="Unload plugin to free memory"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </button>
-          )}
         </div>
       </div>
 
@@ -167,22 +183,27 @@ export function PluginManager({ projectId: _projectId }: PluginManagerProps) {
       {!plugin.available && (
         <div className="flex items-start gap-2 rounded border border-destructive/30 bg-destructive/10 p-2 text-[11px] text-destructive">
           <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-          <span className="break-all">{plugin.unavailable_reason || 'Missing dependency or import failure.'}</span>
+          <span className="break-all">{plugin.unavailableReason || 'Blocked by runtime preflight.'}</span>
         </div>
       )}
 
       {expandedPlugin === plugin.name && (
         <div className="flex flex-col gap-2 mt-1 p-2 bg-accent/5 rounded text-[10px]">
+          <div className="flex flex-wrap gap-2 text-muted-foreground">
+            <span>Status: {plugin.preflightStatus}</span>
+            <span>Loaded: {plugin.loaded ? 'yes' : 'lazy'}</span>
+            <span>Self-test: {plugin.supportsSelfTest ? 'yes' : 'no'}</span>
+          </div>
           <div>
             <span className="font-semibold text-foreground">Input:</span>
             <pre className="mt-1 p-2 bg-background rounded overflow-x-auto text-muted-foreground">
-              {JSON.stringify(plugin.input_schema, null, 2)}
+              {JSON.stringify(plugin.inputSchema, null, 2)}
             </pre>
           </div>
           <div>
             <span className="font-semibold text-foreground">Output:</span>
             <pre className="mt-1 p-2 bg-background rounded overflow-x-auto text-muted-foreground">
-              {JSON.stringify(plugin.output_schema, null, 2)}
+              {JSON.stringify(plugin.outputSchema, null, 2)}
             </pre>
           </div>
         </div>
@@ -236,20 +257,20 @@ export function PluginManager({ projectId: _projectId }: PluginManagerProps) {
       {/* LLM Configuration */}
       <div className="grid grid-cols-2 gap-3 p-3 bg-accent/5 rounded border border-border/50">
         <div className="flex flex-col gap-1">
-          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Orchestrator</span>
+          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Orchestrator Model</span>
           <div className="flex items-center gap-2">
             <Zap className="h-3.5 w-3.5 text-orange-500" />
             <span className="text-xs font-medium text-foreground">
-              {orchestratorProvider}/{orchestratorModel || 'local'}
+              {orchestratorModel || 'local'}
             </span>
           </div>
         </div>
         <div className="flex flex-col gap-1">
-          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Tool Caller</span>
+          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Runtime</span>
           <div className="flex items-center gap-2">
             <Database className="h-3.5 w-3.5 text-blue-500" />
             <span className="text-xs font-medium text-foreground">
-              {toolProvider}/{toolModel || 'local'}
+              {runtimeSummary || 'loading'}
             </span>
           </div>
         </div>
@@ -278,11 +299,11 @@ export function PluginManager({ projectId: _projectId }: PluginManagerProps) {
       {showAllModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4">
           <div className="flex max-h-[85vh] w-full max-w-4xl flex-col rounded-xl border border-border bg-card shadow-2xl">
-            <div className="flex items-center justify-between border-b border-border px-4 py-3">
+          <div className="flex items-center justify-between border-b border-border px-4 py-3">
               <div>
-                <h3 className="text-sm font-semibold text-foreground">All Discovery Plugins</h3>
+                <h3 className="text-sm font-semibold text-foreground">All Framework Plugins</h3>
                 <p className="text-xs text-muted-foreground">
-                  Showing all registered and unavailable plugins with dependency status.
+                  Showing registered plugins with Atlas runtime preflight status.
                 </p>
               </div>
               <button

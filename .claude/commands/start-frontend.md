@@ -1,0 +1,1 @@
+Start the Atlas frontend dev server. Run `cd src/frontend && npm run dev` and report the URL it's listening on.

@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "atlas-sdk"
+version = "0.1.0"
+description = "Developer toolkit for building .atlas plugins for the Atlas Framework"
+readme = {text = "Developer toolkit for building .atlas plugins for the Atlas Framework", content-type = "text/plain"}
+license = "LicenseRef-Proprietary"
+requires-python = ">=3.10"
+authors = [
+    { name = "Atlas Framework Team" },
+]
+keywords = ["atlas", "plugin", "drug-discovery", "chemistry"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Programming Language :: Python :: 3",
+]
+dependencies = [
+    "cryptography>=42.0",
+    "pydantic>=2.0",
+]
+
+[project.scripts]
+atlas-sdk = "atlas_sdk.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["atlas_sdk"]

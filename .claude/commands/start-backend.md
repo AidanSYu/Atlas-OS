@@ -1,0 +1,1 @@
+Start the Atlas backend server. Run `cd src/backend && python run_server.py` and verify the server starts without errors. Report the URL it's listening on.

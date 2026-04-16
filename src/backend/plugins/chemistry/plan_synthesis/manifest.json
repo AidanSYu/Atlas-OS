@@ -1,0 +1,27 @@
+{
+  "schema_version": "1.0",
+  "name": "plan_synthesis",
+  "version": "0.1.0",
+  "description": "Generate retrosynthesis routes for a target molecule using AiZynthFinder or fallback heuristics.",
+  "entry_point": "wrapper.py",
+  "priority": 45,
+  "tags": ["chemistry", "retrosynthesis", "planning"],
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "smiles": {
+        "type": "string",
+        "description": "SMILES representation of the target molecule."
+      }
+    },
+    "required": ["smiles"]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "routes": {"type": "array", "items": {"type": "object"}},
+      "routes_found": {"type": "integer"},
+      "summary": {"type": "string"}
+    }
+  }
+}

@@ -28,9 +28,7 @@ transformers>=4.38.2,<5.0.0
 torch==2.5.1
 torchvision==0.20.1
 
-# Agentic RAG - Two-Brain Swarm
-langgraph>=0.2.0
-langgraph-checkpoint-sqlite>=1.0.0
+# Graph substrate
 networkx>=3.2
 rustworkx>=0.14.0
 
@@ -60,7 +58,7 @@ litellm>=1.30.0           # Universal API router (DeepSeek, MiniMax, OpenAI, etc
 # Phase 3.0: Hybrid Retrieval (BM25 + RRF)
 bm25s>=0.2.0              # Fast sparse keyword retrieval (BM25)
 
-# Phase 3.0: MoE Expert Tools
+# Optional local retrieval helpers
 duckduckgo-search>=6.0.0  # Web fallback for Retrieval Expert
 
 # Discovery OS: Deterministic Chemistry Plugins (Phase 1)
@@ -75,3 +73,4 @@ scipy>=1.11.0             # Signal processing, peak detection (find_peaks)
 # Testing
 pytest>=7.4.0
 pytest-asyncio>=0.23.0
+httpx<0.28

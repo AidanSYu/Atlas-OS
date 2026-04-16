@@ -1,0 +1,569 @@
+"""Slim non-orchestrator API routes for the Atlas Framework workspace UI."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import shutil
+import uuid
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Literal
+
+from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Query, UploadFile
+from pydantic import BaseModel, Field
+
+from app.core.config import settings
+from app.core.database import Document, Project, get_session
+from app.services.chat import ChatService
+from app.services.context_engine import ContextEngineService
+from app.services.document import DocumentService
+from app.services.graph import GraphService
+from app.services.ingest import IngestionService
+from app.services.llm import get_llm_service
+from app.services.stage_context import (
+    format_stage_context_preamble,
+    set_stage_context_preamble,
+)
+from app.services.workspace import WorkspaceService
+
+router = APIRouter()
+logger = logging.getLogger(__name__)
+
+SUPPORTED_FILE_EXTENSIONS = (".pdf", ".txt", ".docx", ".doc")
+
+_document_service: Optional[DocumentService] = None
+_graph_service: Optional[GraphService] = None
+_ingestion_service: Optional[IngestionService] = None
+_workspace_service: Optional[WorkspaceService] = None
+_context_engine_service: Optional[ContextEngineService] = None
+_chat_service: Optional[ChatService] = None
+
+
+def get_document_service() -> DocumentService:
+    global _document_service
+    if _document_service is None:
+        _document_service = DocumentService()
+    return _document_service
+
+
+def get_graph_service() -> GraphService:
+    global _graph_service
+    if _graph_service is None:
+        _graph_service = GraphService()
+    return _graph_service
+
+
+def get_ingestion_service() -> IngestionService:
+    global _ingestion_service
+    if _ingestion_service is None:
+        _ingestion_service = IngestionService()
+    return _ingestion_service
+
+
+def get_workspace_service() -> WorkspaceService:
+    global _workspace_service
+    if _workspace_service is None:
+        _workspace_service = WorkspaceService()
+    return _workspace_service
+
+
+def get_context_engine_service() -> ContextEngineService:
+    global _context_engine_service
+    if _context_engine_service is None:
+        _context_engine_service = ContextEngineService()
+    return _context_engine_service
+
+
+def get_chat_service() -> ChatService:
+    global _chat_service
+    if _chat_service is None:
+        _chat_service = ChatService()
+    return _chat_service
+
+
+class ProjectCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+
+
+class ProjectResponse(BaseModel):
+    id: str
+    name: str
+    description: Optional[str] = None
+    created_at: str
+
+
+class ModelLoadRequest(BaseModel):
+    model_name: str
+
+
+class RouteIntentRequest(BaseModel):
+    query: str
+    project_id: str
+
+
+class RouteIntentResponse(BaseModel):
+    intent: str
+
+
+class WorkspaceDraftSaveRequest(BaseModel):
+    content: Dict[str, Any]
+
+
+class ChatRequest(BaseModel):
+    query: str
+    project_id: Optional[str] = None
+    mode: Literal["librarian", "cortex"] = "librarian"
+    stage_context: Optional[Dict[str, Any]] = None
+
+
+class ChatCitation(BaseModel):
+    source: str
+    page: int
+    doc_id: Optional[str] = None
+    text: Optional[str] = None
+
+
+class ChatRelationship(BaseModel):
+    source: str
+    target: str
+    type: str
+    properties: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ChatResponse(BaseModel):
+    answer: str
+    reasoning: str
+    citations: List[ChatCitation] = Field(default_factory=list)
+    relationships: List[ChatRelationship] = Field(default_factory=list)
+    context_sources: Dict[str, int] = Field(default_factory=dict)
+
+
+def _list_model_inventory(models_dir: Path) -> Dict[str, Any]:
+    if not models_dir.exists():
+        return {
+            "models_dir": str(models_dir),
+            "llm": [],
+            "embeddings": [],
+            "ner": [],
+            "other": [],
+            "message": "Models directory not found",
+        }
+
+    llm_models = [{"name": path.name, "path": str(path)} for path in sorted(models_dir.glob("*.gguf"))]
+    embedding_models = [
+        {"name": path.name, "path": str(path)}
+        for path in sorted(models_dir.glob("nomic-embed-text*"))
+        if path.is_dir()
+    ]
+    ner_models = [
+        {"name": path.name, "path": str(path)}
+        for path in sorted(models_dir.glob("gliner*"))
+        if path.is_dir()
+    ]
+    known_paths = {
+        *[item["path"] for item in llm_models],
+        *[item["path"] for item in embedding_models],
+        *[item["path"] for item in ner_models],
+    }
+    other_items = [
+        {"name": path.name, "path": str(path)}
+        for path in sorted(models_dir.iterdir())
+        if str(path) not in known_paths
+    ]
+
+    return {
+        "models_dir": str(models_dir),
+        "llm": llm_models,
+        "embeddings": embedding_models,
+        "ner": ner_models,
+        "other": other_items,
+    }
+
+
+def _classify_intent(query: str) -> str:
+    lowered = query.lower()
+    if any(token in lowered for token in ("hypothesis", "synthesize", "compare", "evaluate", "tradeoff")):
+        return "BROAD_RESEARCH"
+    if any(token in lowered for token in ("graph", "relationship", "pathway", "connection", "knowledge")):
+        return "DEEP_DISCOVERY"
+    return "SIMPLE"
+
+
+async def _process_document_background(
+    file_path: str,
+    filename: str,
+    project_id: Optional[str],
+    doc_id: str,
+) -> None:
+    ingestion_service = get_ingestion_service()
+    graph_service = get_graph_service()
+    try:
+        await ingestion_service.ingest_document(
+            file_path=file_path,
+            filename=filename,
+            project_id=project_id,
+            predefined_doc_id=doc_id,
+        )
+        graph_service.invalidate_cache()
+    except Exception as exc:
+        logger.error("Background ingestion failed for %s: %s", filename, exc, exc_info=True)
+        file_path_obj = Path(file_path)
+        if file_path_obj.exists():
+            try:
+                file_path_obj.unlink()
+            except Exception:
+                pass
+
+
+@router.get("/models")
+async def list_models() -> Dict[str, Any]:
+    return _list_model_inventory(Path(settings.MODELS_DIR))
+
+
+@router.get("/models/status")
+async def get_model_status() -> Dict[str, Any]:
+    return get_llm_service().get_status()
+
+
+@router.get("/health")
+async def health_check() -> Dict[str, str]:
+    """Legacy health endpoint kept for compatibility with older UI surfaces."""
+    return {
+        "status": "healthy",
+        "message": "Atlas Framework API is online.",
+    }
+
+
+@router.post("/models/load")
+async def load_model(body: ModelLoadRequest) -> Dict[str, Any]:
+    llm = get_llm_service()
+    try:
+        await llm.load_model(body.model_name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return llm.get_status()
+
+
+@router.get("/models/registry")
+async def get_model_registry() -> Dict[str, Any]:
+    llm = get_llm_service()
+    return {
+        "local": [{"name": name, "source": "local", "provider": "local"} for name in llm.list_available_models()],
+        "api": llm.list_available_api_models(),
+        "active": llm.get_status(),
+    }
+
+
+@router.post("/chat", response_model=ChatResponse)
+@router.post("/api/chat", response_model=ChatResponse)
+async def chat_query(body: ChatRequest) -> ChatResponse:
+    """Grounded chat endpoint for Librarian/Cortex corpus Q&A."""
+    if not body.query.strip():
+        raise HTTPException(status_code=400, detail="query is required")
+
+    stage_preamble = format_stage_context_preamble(body.stage_context)
+    set_stage_context_preamble(stage_preamble)
+    try:
+        result = await get_chat_service().chat(
+            body.query.strip(),
+            project_id=body.project_id,
+            mode=body.mode,
+        )
+        return ChatResponse(**result)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Chat query failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Chat query failed: {exc}") from exc
+    finally:
+        set_stage_context_preamble(None)
+
+
+@router.post("/projects", response_model=ProjectResponse)
+async def create_project(body: ProjectCreate) -> ProjectResponse:
+    session = get_session()
+    try:
+        existing = session.query(Project).filter(Project.name == body.name).first()
+        if existing:
+            raise HTTPException(status_code=409, detail=f"Project '{body.name}' already exists")
+
+        project = Project(
+            id=str(uuid.uuid4()),
+            name=body.name,
+            description=body.description,
+            created_at=datetime.utcnow(),
+        )
+        session.add(project)
+        session.commit()
+        return ProjectResponse(
+            id=project.id,
+            name=project.name,
+            description=project.description,
+            created_at=project.created_at.isoformat(),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Error creating project: {exc}") from exc
+    finally:
+        session.close()
+
+
+@router.get("/projects", response_model=List[ProjectResponse])
+async def list_projects() -> List[ProjectResponse]:
+    session = get_session()
+    try:
+        projects = session.query(Project).order_by(Project.created_at.desc()).all()
+        return [
+            ProjectResponse(
+                id=project.id,
+                name=project.name,
+                description=project.description,
+                created_at=project.created_at.isoformat() if project.created_at else "",
+            )
+            for project in projects
+        ]
+    finally:
+        session.close()
+
+
+@router.delete("/projects/{project_id}")
+async def delete_project(project_id: str) -> Dict[str, str]:
+    session = get_session()
+    try:
+        project = session.query(Project).filter(Project.id == project_id).first()
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        session.delete(project)
+        session.commit()
+        return {"status": "success", "message": f"Deleted project {project_id}"}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Error deleting project: {exc}") from exc
+    finally:
+        session.close()
+
+
+@router.post("/ingest")
+async def ingest_document(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    project_id: Optional[str] = Query(None),
+) -> Dict[str, Any]:
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Filename is required")
+
+    if not file.filename.lower().endswith(SUPPORTED_FILE_EXTENSIONS):
+        supported = ", ".join(SUPPORTED_FILE_EXTENSIONS)
+        raise HTTPException(status_code=400, detail=f"Unsupported file type. Supported formats: {supported}")
+
+    upload_path = Path(settings.UPLOAD_DIR) / file.filename
+    ingestion_service = get_ingestion_service()
+
+    try:
+        with open(upload_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        file_hash = ingestion_service._calculate_hash(str(upload_path))
+        session = get_session()
+        try:
+            duplicate_query = session.query(Document).filter(Document.file_hash == file_hash)
+            if project_id:
+                duplicate_query = duplicate_query.filter(Document.project_id == project_id)
+            existing = duplicate_query.first()
+            if existing:
+                if upload_path.exists():
+                    upload_path.unlink()
+                return {
+                    "status": "duplicate",
+                    "message": "Document already exists",
+                    "filename": file.filename,
+                    "doc_id": str(existing.id),
+                }
+
+            file_size = upload_path.stat().st_size
+            _, mime_type = ingestion_service._get_file_type_and_mime(file.filename)
+            doc_id = str(uuid.uuid4())
+            document = Document(
+                id=doc_id,
+                filename=file.filename,
+                file_hash=file_hash,
+                file_path=str(upload_path),
+                file_size=file_size,
+                mime_type=mime_type,
+                status="processing",
+                project_id=project_id,
+                uploaded_at=datetime.utcnow(),
+            )
+            session.add(document)
+            session.commit()
+        finally:
+            session.close()
+
+        background_tasks.add_task(
+            _process_document_background,
+            str(upload_path),
+            file.filename,
+            project_id,
+            doc_id,
+        )
+        return {
+            "status": "processing",
+            "message": f"Document '{file.filename}' uploaded and processing started",
+            "filename": file.filename,
+            "doc_id": doc_id,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Ingestion error for %s: %s", file.filename, exc, exc_info=True)
+        if upload_path.exists():
+            try:
+                upload_path.unlink()
+            except Exception:
+                pass
+        raise HTTPException(status_code=500, detail=f"Processing error: {exc}") from exc
+
+
+@router.get("/files", response_model=List[Dict[str, Any]])
+async def list_files(status: Optional[str] = None, project_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    return get_document_service().list_documents(status=status, project_id=project_id, limit=100)
+
+
+@router.get("/files/{doc_id}")
+async def get_file(doc_id: str) -> Any:
+    file_response = get_document_service().get_document_file(doc_id)
+    if not file_response:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return file_response
+
+
+@router.delete("/files/{doc_id}")
+async def delete_file(doc_id: str) -> Dict[str, str]:
+    success = get_document_service().delete_document(doc_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Document not found")
+    get_graph_service().invalidate_cache()
+    return {"status": "success", "message": f"Deleted document {doc_id}"}
+
+
+@router.get("/entities", response_model=List[Dict[str, Any]])
+async def list_entities(
+    entity_type: Optional[str] = None,
+    document_id: Optional[str] = None,
+    project_id: Optional[str] = None,
+    limit: int = Query(50, ge=1, le=500),
+) -> List[Dict[str, Any]]:
+    return get_graph_service().list_nodes(
+        label=entity_type,
+        document_id=document_id,
+        project_id=project_id,
+        limit=limit,
+    )
+
+
+@router.get("/entities/{entity_id}/relationships", response_model=List[Dict[str, Any]])
+async def get_entity_relationships(entity_id: str, direction: str = "both") -> List[Dict[str, Any]]:
+    return get_graph_service().get_node_relationships(entity_id, direction=direction)
+
+
+@router.get("/graph/types")
+async def get_entity_types(project_id: Optional[str] = None) -> Dict[str, Any]:
+    return {"entity_types": get_graph_service().get_node_types(project_id=project_id)}
+
+
+@router.get("/graph/full")
+async def get_full_graph(
+    document_id: Optional[str] = None,
+    project_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    return await get_graph_service().get_full_graph_cached(document_id=document_id, project_id=project_id)
+
+
+@router.get("/files/{doc_id}/structure")
+async def get_document_structure(doc_id: str) -> Dict[str, Any]:
+    result = await get_context_engine_service().get_document_structure(doc_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return result
+
+
+@router.get("/files/{doc_id}/related")
+async def get_related_passages(
+    doc_id: str,
+    text: str = Query(..., min_length=3),
+    project_id: Optional[str] = Query(None),
+    limit: int = Query(8, ge=1, le=20),
+) -> List[Dict[str, Any]]:
+    return await get_context_engine_service().get_related_passages(
+        doc_id=doc_id,
+        text=text,
+        project_id=project_id,
+        limit=limit,
+    )
+
+
+@router.get("/files/{doc_id}/chunks")
+async def get_document_chunks(
+    doc_id: str,
+    page: Optional[int] = Query(None, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+) -> List[Dict[str, Any]]:
+    return await get_context_engine_service().get_document_chunks(
+        doc_id=doc_id,
+        page_number=page,
+        limit=limit,
+    )
+
+
+@router.post("/api/context")
+async def get_context_suggestions(request: Dict[str, Any]) -> Dict[str, Any]:
+    suggestions = await get_context_engine_service().get_context_suggestions(
+        project_id=request.get("project_id") or "",
+        selected_text=request.get("selected_text"),
+        current_doc_id=request.get("current_doc_id"),
+        current_page=request.get("current_page"),
+    )
+    return {"status": "success", "suggestions": suggestions}
+
+
+@router.get("/api/workspace/{project_id}/drafts")
+async def list_workspace_drafts(project_id: str) -> List[Dict[str, Any]]:
+    return get_workspace_service().list_drafts(project_id)
+
+
+@router.get("/api/workspace/{project_id}/drafts/{draft_id}")
+async def get_workspace_draft(project_id: str, draft_id: str) -> Dict[str, Any]:
+    draft = get_workspace_service().get_draft(project_id, draft_id)
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    return draft
+
+
+@router.post("/api/workspace/{project_id}/drafts/{draft_id}")
+async def save_workspace_draft(
+    project_id: str,
+    draft_id: str,
+    body: WorkspaceDraftSaveRequest,
+) -> Dict[str, Any]:
+    return get_workspace_service().save_draft(project_id, draft_id, body.content)
+
+
+@router.delete("/api/workspace/{project_id}/drafts/{draft_id}")
+async def delete_workspace_draft(project_id: str, draft_id: str) -> Dict[str, Any]:
+    deleted = get_workspace_service().delete_draft(project_id, draft_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    return {"status": "deleted", "id": draft_id}
+
+
+@router.post("/api/route", response_model=RouteIntentResponse)
+async def route_intent_endpoint(request: RouteIntentRequest) -> RouteIntentResponse:
+    return RouteIntentResponse(intent=_classify_intent(request.query))

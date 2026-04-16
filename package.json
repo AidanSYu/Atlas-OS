@@ -1,10 +1,10 @@
 {
   "scripts": {
-    "build": "cd src/frontend && npm run build",
-    "dev": "cd src/frontend && npm run dev",
+    "build": "cmd /c npm.cmd --prefix src/frontend run build",
+    "dev": "cmd /c npm.cmd --prefix src/frontend run dev",
     "build:backend": "powershell -ExecutionPolicy Bypass -File ./scripts/build/build-backend.ps1 -SkipIfUnchanged",
-    "tauri:dev": "npx tauri dev --no-watch",
-    "tauri:build": "npm run build:backend && npx tauri build"
+    "tauri:dev": "cmd /c npx.cmd tauri dev --no-watch",
+    "tauri:build": "npm run build:backend && cmd /c npx.cmd tauri build"
   },
   "devDependencies": {
     "@tauri-apps/cli": "1.6"

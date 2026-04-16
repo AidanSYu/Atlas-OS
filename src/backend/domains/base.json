@@ -1,0 +1,25 @@
+{
+  "name": "base",
+  "description": "Domain-agnostic defaults shared by all verticals",
+  "edge_types": [
+    "CAUSES",
+    "ENABLES",
+    "PART_OF",
+    "RELATED_TO",
+    "CONTRADICTS",
+    "SUPPORTS",
+    "MEASURED_BY"
+  ],
+  "entity_labels": [
+    "Person",
+    "Organization",
+    "Location",
+    "Concept",
+    "Method",
+    "Date",
+    "Event",
+    "Work",
+    "Title",
+    "Institution"
+  ]
+}

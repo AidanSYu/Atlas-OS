@@ -64,7 +64,7 @@ const QUICK_QUERIES: Record<string, { queries: string[]; title: string; desc: st
   },
   cortex: {
     title: 'Research Cortex',
-    desc: 'Deep multi-agent analysis with reflection loops.',
+    desc: 'Deeper grounded reasoning across your corpus and knowledge graph.',
     queries: [
       'What connections exist between these concepts?',
       'Generate a hypothesis about...',

@@ -91,7 +91,7 @@ class MarkdownExporter:
         messages: List[Dict[str, Any]],
         project_name: str = "Atlas Research",
     ) -> str:
-        """Export a chat/swarm conversation as Markdown."""
+        """Export a chat or orchestrator conversation as Markdown."""
         lines = [
             f"# {project_name} - Research Log",
             f"*Exported from Atlas on {datetime.now().strftime('%Y-%m-%d %H:%M')}*",

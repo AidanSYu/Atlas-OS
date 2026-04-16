@@ -36,10 +36,17 @@ export default function ContextEngine({
   suggestions,
   isProcessing,
 }: ContextEngineProps) {
-  const activeThread = useChatStore((s) => s.threads.find((t) => t.id === s.activeThreadId) ?? null);
+  const threads = useChatStore((s) => s.threads);
+  const activeThreadId = useChatStore((s) => s.activeThreadId);
+  const activeThread = useMemo(
+    () => threads.find((thread) => thread.id === activeThreadId) ?? null,
+    [activeThreadId, threads]
+  );
   const librarianMessages = activeThread?.messages ?? [];
   const cortexMessages = activeThread?.messages ?? [];
-  const { selectedNodeId, nodes, links, focusedNodeId } = useGraphStore();
+  const nodes = useGraphStore((s) => s.nodes);
+  const links = useGraphStore((s) => s.links);
+  const focusedNodeId = useGraphStore((s) => s.focusedNodeId);
 
   // Phase 4: Proactive context state
   const [docStructure, setDocStructure] = useState<DocumentStructureResponse | null>(null);

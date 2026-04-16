@@ -1,0 +1,33 @@
+{
+  "schema_version": "1.0",
+  "name": "standardize_smiles",
+  "version": "0.1.0",
+  "description": "Canonicalize SMILES, generate InChIKeys, and deduplicate structures.",
+  "entry_point": "wrapper.py",
+  "priority": 70,
+  "tags": ["chemistry", "rdkit", "normalization"],
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "smiles_list": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "List of SMILES strings to standardize."
+      },
+      "existing_inchikeys": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Optional InChIKeys to treat as duplicates."
+      }
+    },
+    "required": ["smiles_list"]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "molecules": {"type": "array", "items": {"type": "object"}},
+      "summary": {"type": "string"},
+      "failed_count": {"type": "integer"}
+    }
+  }
+}

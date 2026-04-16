@@ -17,7 +17,6 @@ import {
   Pause,
 } from 'lucide-react';
 import type { Run, ToolInvocation } from '@/stores/runStore';
-import { STAGE_LABELS, type GoldenPathStage } from '@/lib/discovery-types';
 import {
   truncatePayload,
   downloadBlob,
@@ -38,11 +37,9 @@ interface PipelineStage {
 
 function derivePipelineStages(run: Run): PipelineStage[] {
   if (run.toolInvocations.length === 0) {
-    const stageLabel =
-      run.mode === 'discovery' ? 'DISCOVERY' : run.mode.toUpperCase();
     return [
       {
-        label: stageLabel,
+        label: run.mode.toUpperCase(),
         tools: [],
         status: mapRunStatus(run.status),
         elapsedMs: run.completedAt

@@ -1,0 +1,30 @@
+{
+  "schema_version": "1.0",
+  "name": "check_toxicity",
+  "version": "0.1.0",
+  "description": "Screen molecules for SMARTS structural alerts and PAINS patterns.",
+  "entry_point": "wrapper.py",
+  "priority": 58,
+  "tags": ["chemistry", "toxicity", "rdkit"],
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "smiles": {
+        "type": "string",
+        "description": "SMILES representation of a molecule."
+      },
+      "smiles_list": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Optional batch mode list of SMILES strings."
+      }
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "toxicity_results": {"type": "array", "items": {"type": "object"}},
+      "summary": {"type": "string"}
+    }
+  }
+}

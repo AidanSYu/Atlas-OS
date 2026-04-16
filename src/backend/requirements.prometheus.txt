@@ -1,0 +1,34 @@
+# Prometheus manufacturing vertical runtime stack
+#
+# Install this on top of the base Atlas backend requirements when preparing a
+# machine for manufacturing/plugin proof runs.
+#
+# Example:
+#   pip install -r requirements.txt -r requirements.prometheus.txt
+#
+# Notes:
+# - Some packages below are heavy and may require platform-specific validation.
+# - Local model weights are still required for offline VLM and TSFM operation.
+# - This file is intentionally explicit so runtime readiness is reproducible.
+
+# Traceability / compliance
+prov>=2.0.1
+
+# Manufacturing world model
+statsforecast>=1.7.8
+ruptures>=1.1.9
+
+# Physics surrogate and autonomous sandbox
+gpytorch>=1.13
+botorch>=0.12.0
+neuraloperator>=1.0.2
+
+# Causal discovery
+tigramite>=5.2.7.0
+pysr>=0.19.4
+
+# Offline AOI inspection
+anomalib>=1.2.0
+lightning>=2.4.0
+bitsandbytes>=0.43.3
+qwen-vl-utils>=0.0.8

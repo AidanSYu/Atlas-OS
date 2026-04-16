@@ -134,9 +134,9 @@ const generateId = () => Math.random().toString(36).substring(2, 15);
 function makeWelcomeMessage(mode: ChatMode): ChatMessage {
   const messages: Record<ChatMode, string> = {
     librarian:
-      "I'm your **Librarian**. I specialize in document analysis and can answer questions about your uploaded research papers.",
+      "I'm your **Librarian**. I answer quick questions grounded in your project documents and graph context, with citations.",
     cortex:
-      "I'm **Cortex**, your research analysis agent. I can cross-reference documents, identify patterns, and discover connections across your research.",
+      "I'm **Cortex**. I do deeper grounded reasoning across your project corpus and graph, but I do not run task-panel plugins from chat.",
     moe:
       "I'm the **Mixture of Experts (MoE) Supervisor**. I manage a team of specialized agents. Ask a complex research question, and I'll orchestrate the team.",
   };

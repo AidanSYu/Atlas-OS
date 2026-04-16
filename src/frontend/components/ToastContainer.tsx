@@ -19,7 +19,7 @@ const COLOR_MAP = {
 };
 
 function ToastEntry({ toast }: { toast: ToastItem }) {
-  const { removeToast } = useToastStore();
+  const removeToast = useToastStore((s) => s.removeToast);
   const Icon = ICON_MAP[toast.type];
   const colors = COLOR_MAP[toast.type];
 
@@ -40,7 +40,7 @@ function ToastEntry({ toast }: { toast: ToastItem }) {
 }
 
 export default function ToastContainer() {
-  const { toasts } = useToastStore();
+  const toasts = useToastStore((s) => s.toasts);
 
   if (toasts.length === 0) return null;
 

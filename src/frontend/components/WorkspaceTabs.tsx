@@ -1,11 +1,17 @@
 'use client';
 
 import React, { useState } from 'react';
-import { FileText, FlaskConical, X } from 'lucide-react';
+import { FileText, FlaskConical, Puzzle, X } from 'lucide-react';
+
+/* ================================================================
+   WorkspaceTabs — tabbed interface for documents, sessions, plugins
+   Each tab has a visible border separating it from neighbors.
+   ================================================================ */
 
 export type WorkspaceTab =
   | { kind: 'document'; id: string; docId: string; filename: string }
-  | { kind: 'discovery'; id: string; sessionId: string; sessionName: string };
+  | { kind: 'session'; id: string; threadId: string; title: string }
+  | { kind: 'plugins'; id: string };
 
 interface WorkspaceTabsProps {
   tabs: WorkspaceTab[];
@@ -13,6 +19,22 @@ interface WorkspaceTabsProps {
   onSelectTab: (id: string) => void;
   onCloseTab: (id: string) => void;
   onReorder?: (fromIndex: number, toIndex: number) => void;
+}
+
+function getTabIcon(tab: WorkspaceTab) {
+  switch (tab.kind) {
+    case 'document': return <FileText className="h-3.5 w-3.5 shrink-0" />;
+    case 'session': return <FlaskConical className="h-3.5 w-3.5 shrink-0" />;
+    case 'plugins': return <Puzzle className="h-3.5 w-3.5 shrink-0" />;
+  }
+}
+
+function getTabLabel(tab: WorkspaceTab): string {
+  switch (tab.kind) {
+    case 'document': return tab.filename;
+    case 'session': return tab.title;
+    case 'plugins': return 'Plugins';
+  }
 }
 
 export function WorkspaceTabs({
@@ -57,19 +79,11 @@ export function WorkspaceTabs({
   if (tabs.length === 0) return null;
 
   return (
-    <div className="flex h-9 shrink-0 items-end gap-0.5 border-b border-border bg-card/50 px-1">
+    <div className="flex h-9 shrink-0 items-stretch border-b border-border bg-card">
       {tabs.map((tab, index) => {
         const isActive = tab.id === activeTabId;
         const isDragOver = dragOverIndex === index;
         const isDragging = draggedIndex === index;
-
-        const icon = tab.kind === 'document' ? (
-          <FileText className="h-3.5 w-3.5 shrink-0" />
-        ) : (
-          <FlaskConical className="h-3.5 w-3.5 shrink-0 text-orange-500" />
-        );
-
-        const label = tab.kind === 'document' ? tab.filename : tab.sessionName;
 
         return (
           <div
@@ -80,22 +94,24 @@ export function WorkspaceTabs({
             onDragLeave={handleDragLeave}
             onDrop={(e) => handleDrop(e, index)}
             onDragEnd={handleDragEnd}
-            className={`
-              group flex max-w-[200px] cursor-pointer items-center gap-2 rounded-t-md border border-b-0 border-transparent px-3 py-1.5 text-xs transition-all
-              ${isActive ? 'border-border bg-background text-foreground' : 'text-muted-foreground hover:bg-surface hover:text-foreground'}
-              ${isDragOver ? 'border-primary/40 bg-primary/5' : ''}
-              ${isDragging ? 'opacity-50' : ''}
-            `}
+            className={[
+              'group flex max-w-[220px] cursor-pointer items-center gap-2 border-r border-border px-3 text-xs transition-colors',
+              isActive
+                ? 'tab-active bg-background text-foreground'
+                : 'bg-card text-muted-foreground hover:bg-surface hover:text-foreground',
+              isDragOver ? 'bg-accent/5' : '',
+              isDragging ? 'opacity-40' : '',
+            ].join(' ')}
             onClick={() => onSelectTab(tab.id)}
           >
-            {icon}
-            <span className="min-w-0 truncate" title={label}>
-              {label}
+            {getTabIcon(tab)}
+            <span className="min-w-0 truncate" title={getTabLabel(tab)}>
+              {getTabLabel(tab)}
             </span>
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); onCloseTab(tab.id); }}
-              className="ml-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/20 hover:text-destructive group-hover:opacity-100"
+              className="ml-auto flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/20 hover:text-destructive group-hover:opacity-100"
               aria-label="Close tab"
             >
               <X className="h-3 w-3" />
@@ -103,10 +119,12 @@ export function WorkspaceTabs({
           </div>
         );
       })}
+      {/* empty space after tabs — just background */}
+      <div className="flex-1 bg-card" />
     </div>
   );
 }
 
-// Backward compatibility export
+// Backward compat
 export type DocumentTab = Extract<WorkspaceTab, { kind: 'document' }>;
 export { WorkspaceTabs as DocumentTabs };
