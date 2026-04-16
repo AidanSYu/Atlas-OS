@@ -1,0 +1,1 @@
+Test the Atlas Framework API. Run a curl request to `http://localhost:8000/api/framework/run` with a simple test prompt. Also check `/api/health` and `/docs`. Report whether the orchestrator, plugins, and substrate (SQLite + Qdrant + Rustworkx) are responding correctly.

@@ -57,17 +57,15 @@ export default function KnowledgeGraph({ height, width, projectId, documentId }:
   const [showLabels, setShowLabels] = useState(true);
   const [hoveredNode, setHoveredNode] = useState<RenderNode | null>(null);
 
-  const {
-    nodes,
-    links,
-    loading,
-    error,
-    focusedNodeId,
-    loadGraph,
-    setSelectedNode,
-    setFocusedNode,
-    clearFocus,
-  } = useGraphStore();
+  const nodes = useGraphStore((s) => s.nodes);
+  const links = useGraphStore((s) => s.links);
+  const loading = useGraphStore((s) => s.loading);
+  const error = useGraphStore((s) => s.error);
+  const focusedNodeId = useGraphStore((s) => s.focusedNodeId);
+  const loadGraph = useGraphStore((s) => s.loadGraph);
+  const setSelectedNode = useGraphStore((s) => s.setSelectedNode);
+  const setFocusedNode = useGraphStore((s) => s.setFocusedNode);
+  const clearFocus = useGraphStore((s) => s.clearFocus);
 
   useEffect(() => {
     setIsStabilizing(true);

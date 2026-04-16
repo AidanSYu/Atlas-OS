@@ -32,35 +32,41 @@ interface ResearchCanvasProps {
 }
 
 export function ResearchCanvasPropsInner({ projectId }: ResearchCanvasProps) {
-  const canvasStore = useCanvasStore();
-  const [nodes, setNodes, onNodesChange] = useNodesState(canvasStore.nodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(canvasStore.edges);
+  const storeNodes = useCanvasStore((s) => s.nodes);
+  const storeEdges = useCanvasStore((s) => s.edges);
+  const addNode = useCanvasStore((s) => s.addNode);
+  const removeNode = useCanvasStore((s) => s.removeNode);
+  const setStoreNodes = useCanvasStore((s) => s.setNodes);
+  const setStoreEdges = useCanvasStore((s) => s.setEdges);
+  const clearCanvas = useCanvasStore((s) => s.clearCanvas);
+  const [nodes, setNodes, onNodesChange] = useNodesState(storeNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(storeEdges);
 
   const onConnect = useCallback(
     (params: Connection) => {
       const newEdge = addEdge(params, edges);
       setEdges(newEdge);
-      canvasStore.setEdges(newEdge);
+      setStoreEdges(newEdge);
     },
-    [edges, setEdges, canvasStore]
+    [edges, setEdges, setStoreEdges]
   );
 
   const handleNodesChange = useCallback(
     (changes: any) => {
       onNodesChange(changes);
       // Sync to store after a delay (debounce)
-      setTimeout(() => canvasStore.setNodes(nodes), 300);
+      setTimeout(() => setStoreNodes(nodes), 300);
     },
-    [onNodesChange, nodes, canvasStore]
+    [onNodesChange, nodes, setStoreNodes]
   );
 
   const handleClearCanvas = useCallback(() => {
     if (confirm('Clear all nodes and connections from the canvas?')) {
-      canvasStore.clearCanvas();
+      clearCanvas();
       setNodes([]);
       setEdges([]);
     }
-  }, [canvasStore, setNodes, setEdges]);
+  }, [clearCanvas, setNodes, setEdges]);
 
   const { screenToFlowPosition } = useReactFlow();
 
@@ -86,16 +92,16 @@ export function ResearchCanvasPropsInner({ projectId }: ResearchCanvasProps) {
           status: doc.status,
           onOpen: () => console.log('Open doc:', doc.id),
           onDelete: () => {
-            canvasStore.removeNode(`doc-${doc.id}`);
+            removeNode(`doc-${doc.id}`);
             setNodes((nds) => nds.filter((n) => n.id !== `doc-${doc.id}`));
           },
         },
       };
 
-      canvasStore.addNode(newNode);
+      addNode(newNode);
       setNodes((nds) => [...nds, newNode]);
     },
-    [setNodes, canvasStore, screenToFlowPosition]
+    [addNode, removeNode, screenToFlowPosition, setNodes]
   );
 
   const onDragOver = useCallback((event: React.DragEvent) => {

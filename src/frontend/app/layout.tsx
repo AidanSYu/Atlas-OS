@@ -6,17 +6,20 @@ import ToastContainer from '@/components/ToastContainer'
 const inter = Inter({
   subsets: ['latin'],
   variable: '--font-sans',
+  display: 'swap',
 })
 
 const sora = Sora({
   subsets: ['latin'],
   variable: '--font-display',
+  display: 'swap',
 })
 
 const ibmPlexMono = IBM_Plex_Mono({
   subsets: ['latin'],
   weight: ['400', '500'],
   variable: '--font-mono',
+  display: 'swap',
 })
 
 export const metadata: Metadata = {
@@ -31,8 +34,8 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="en" className={`dark ${inter.variable} ${sora.variable} ${ibmPlexMono.variable}`}>
-      <body className={`${inter.className} dark bg-background text-foreground antialiased`}>
+    <html lang="en" className={`dark ${inter.variable} ${sora.variable} ${ibmPlexMono.variable}`} suppressHydrationWarning>
+      <body className={`${inter.className} dark bg-background text-foreground antialiased`} suppressHydrationWarning>
         {children}
         <ToastContainer />
       </body>

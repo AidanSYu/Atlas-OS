@@ -8,7 +8,6 @@ import {
   Brain,
   BookOpen,
   Network,
-  Beaker,
   CheckCircle2,
   XCircle,
   AlertTriangle,
@@ -31,11 +30,10 @@ import type { ChatMode } from '@/hooks/useRunManager';
 // Mode metadata
 // ---------------------------------------------------------------------------
 
-const MODE_META: Record<string, { label: string; icon: typeof BookOpen; color: string; bg: string }> = {
+const MODE_META: Record<ChatMode, { label: string; icon: typeof BookOpen; color: string; bg: string }> = {
   librarian: { label: 'Librarian', icon: BookOpen, color: 'text-primary', bg: 'bg-primary/10' },
   cortex: { label: 'Cortex', icon: Brain, color: 'text-accent', bg: 'bg-accent/10' },
   moe: { label: 'MoE', icon: Network, color: 'text-blue-500', bg: 'bg-blue-500/10' },
-  discovery: { label: 'Discovery', icon: Beaker, color: 'text-orange-500', bg: 'bg-orange-500/10' },
 };
 
 const STATUS_META: Record<RunStatus, { label: string; icon: typeof CheckCircle2; color: string }> = {
@@ -294,7 +292,7 @@ export function RunAuditPanel({ open, onClose, projectId, selectedRunId }: RunAu
             {/* Filter tabs (only in list view) */}
             {!selectedRun && (
               <div className="flex gap-1 border-b border-border/30 px-4 py-2">
-                {(['all', 'librarian', 'cortex', 'moe', 'discovery'] as const).map((mode) => {
+                {(['all', 'librarian', 'cortex', 'moe'] as const).map((mode) => {
                   const isActive = filterMode === mode;
                   return (
                     <button

@@ -137,10 +137,9 @@ export function useStructureCompletion(
   const abortRef = useRef<AbortController | null>(null);
 
   // Read minimal stage context from discoveryStore (no selector resubscription spam)
+  const epochs = useDiscoveryStore((s) => s.epochs);
   const activeEpochId = useDiscoveryStore((s) => s.activeEpochId);
-  const activeEpoch = useDiscoveryStore((s) =>
-    s.activeEpochId ? s.epochs.get(s.activeEpochId) ?? null : null,
-  );
+  const activeEpoch = activeEpochId ? epochs.get(activeEpochId) ?? null : null;
 
   const fetchSuggestion = useCallback(
     async (text: string, cursor: number) => {

@@ -1,0 +1,139 @@
+{
+  "schema_version": "1.0",
+  "name": "sandbox_lab",
+  "version": "1.0.0",
+  "description": "Multi-objective Bayesian optimization for autonomous experimentation. Uses the BoTorch stack for constrained batch suggestion, Pareto extraction, and a built-in solder reflow optimization benchmark.",
+  "entry_point": "wrapper.py",
+  "priority": 68,
+  "tags": ["optimization", "bayesian", "multi-objective", "experiment", "autonomous"],
+  "license": "Apache-2.0",
+  "optional_dependencies": ["botorch", "gpytorch", "torch"],
+  "resource_requirements": {
+    "min_vram_mb": 0,
+    "min_ram_mb": 1024,
+    "gpu_required": false,
+    "recommended_vram_mb": 1500
+  },
+  "self_test": "python -c \"from plugins.prometheus.sandbox_lab.wrapper import PLUGIN; import asyncio; r=asyncio.run(PLUGIN.invoke({'mode':'self_test'})); assert r.get('valid')\"",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "mode": {
+        "type": "string",
+        "enum": ["suggest", "optimize", "pareto", "self_test"],
+        "description": "Operation mode: 'suggest' proposes next experiments, 'optimize' runs a full BO loop on an internal synthetic objective, 'pareto' extracts the Pareto front from observations, 'self_test' runs built-in solder reflow demo."
+      },
+      "parameters": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "name": {"type": "string"},
+            "bounds": {
+              "type": "array",
+              "items": {"type": "number"},
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "type": {
+              "type": "string",
+              "enum": ["continuous", "integer"]
+            }
+          },
+          "required": ["name", "bounds"]
+        },
+        "description": "Parameter definitions with name, [low, high] bounds, and optional type (continuous or integer)."
+      },
+      "objectives": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "name": {"type": "string"},
+            "minimize": {"type": "boolean"}
+          },
+          "required": ["name", "minimize"]
+        },
+        "description": "Objective definitions with name and optimization direction."
+      },
+      "constraints": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "expression": {"type": "string"},
+            "type": {
+              "type": "string",
+              "enum": ["<=", ">=", "=="]
+            },
+            "value": {"type": "number"}
+          },
+          "required": ["expression", "type", "value"]
+        },
+        "description": "Hard constraints on the parameter space."
+      },
+      "observations": {
+        "type": "object",
+        "properties": {
+          "X": {
+            "type": "array",
+            "items": {"type": "array", "items": {"type": "number"}},
+            "description": "2D array of observed parameter values."
+          },
+          "Y": {
+            "type": "array",
+            "items": {"type": "array", "items": {"type": "number"}},
+            "description": "2D array of observed objective values."
+          }
+        },
+        "description": "Existing experimental observations."
+      },
+      "batch_size": {
+        "type": "integer",
+        "description": "Number of experiments to suggest per batch (default 4)."
+      },
+      "n_iterations": {
+        "type": "integer",
+        "description": "Number of BO iterations for optimize mode (default 20)."
+      },
+      "acquisition": {
+        "type": "string",
+        "enum": ["qnehvi", "qnparego", "auto"],
+        "description": "Acquisition function: qnehvi for 2-3 objectives, qnparego for 4+, auto selects automatically."
+      }
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "valid": {"type": "boolean"},
+      "suggestions": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        },
+        "description": "Next suggested experiments as list of {param_name: value} dicts."
+      },
+      "pareto_front": {
+        "type": "array",
+        "items": {"type": "array", "items": {"type": "number"}},
+        "description": "Pareto-optimal objective values."
+      },
+      "pareto_X": {
+        "type": "array",
+        "items": {"type": "array", "items": {"type": "number"}},
+        "description": "Parameter values corresponding to Pareto-optimal points."
+      },
+      "optimization_trace": {
+        "type": "array",
+        "items": {"type": "object"},
+        "description": "Per-iteration trace of the optimization loop."
+      },
+      "best_observed": {
+        "type": "object",
+        "description": "Best observed point(s) and their objective values."
+      },
+      "summary": {"type": "string"}
+    }
+  }
+}

@@ -2,72 +2,94 @@
 @tailwind components;
 @tailwind utilities;
 
-:root,
-.dark {
-  /* ContAInnum / Atlas 3.0 Theme Palette */
-  /* Backgrounds: pure void, not blue-gray */
-  --background: 216 33% 3%;
-  /* #070A0E */
-  --foreground: 216 20% 97%;
-  /* #F2F5F9 */
-  --card: 216 25% 6%;
-  /* slightly lighter void */
-  --surface: 216 20% 10%;
-  --border: 216 15% 18%;
+/* ================================================================
+   Atlas Framework — Theme System
+   Two proper themes with real contrast and visual hierarchy.
+   Dark: slate-based grays with depth (not void black).
+   Light: clean whites/grays, professional research tool.
+   ================================================================ */
 
-  /* Muted: cool gray overlays */
-  --muted: 216 20% 15%;
-  --muted-foreground: 213 18% 70%;
-  /* #9FB0C7 */
+/* ---------- Dark Mode (default) ---------- */
+:root {
+  --background:    222 47% 4%;     /* #080d17 — deep but not void */
+  --foreground:    210 20% 95%;    /* #eff2f6 */
 
-  /* Primary: Crisp white / foreground for high contrast interfaces */
-  --primary: 216 20% 97%;
-  --primary-foreground: 216 33% 3%;
+  --card:          220 30% 7%;     /* #0e1320 — panels, sidebars */
+  --surface:       220 25% 11%;    /* #161d2b — elevated surfaces */
+  --surface-hover: 220 25% 14%;   /* hover states */
 
-  /* Accent: "Safety Orange" for interactive attention */
-  --accent: 9 100% 59%;
-  /* #FF4D2E */
-  --accent-foreground: 216 20% 97%;
+  --border:        220 15% 20%;    /* #2a3040 — visible dividers */
+  --border-strong: 220 15% 26%;   /* stronger separation */
 
-  /* Semantic colors */
-  --success: 160 60% 45%;
-  --warning: 38 92% 50%;
-  --destructive: 0 84% 60%;
-  --info: 205 85% 55%;
+  --muted:         220 15% 16%;
+  --muted-foreground: 215 15% 58%; /* #8592a6 */
 
-  /* Graph entity colors remain slightly adjusted to fit the new void theme */
-  --entity-person: 217 80% 68%;
-  --entity-org: 168 55% 55%;
-  --entity-location: 270 60% 68%;
-  --entity-date: 38 75% 60%;
-  --entity-event: 350 65% 60%;
-  --entity-concept: 205 65% 58%;
-  --entity-document: 225 65% 60%;
+  --primary:       210 20% 95%;    /* foreground-level white */
+  --primary-foreground: 222 47% 4%;
 
-  /* Glow / accent overlay */
-  --glow: 9 100% 59%;
-  /* Safety Orange */
+  --accent:        8 88% 56%;      /* red-orange — the Atlas signature */
+  --accent-foreground: 0 0% 100%;
+  --accent-subtle: 8 60% 14%;     /* muted accent for backgrounds */
+
+  --success:       152 55% 42%;
+  --warning:       38 90% 50%;
+  --destructive:   0 72% 55%;
+  --info:          205 80% 55%;
+
+  --ring:          8 88% 56%;     /* focus ring = accent */
+
+  /* scrollbar */
+  --scrollbar-thumb: 220 15% 22%;
+  --scrollbar-thumb-hover: 220 15% 30%;
 }
+
+/* ---------- Light Mode ---------- */
+.light {
+  --background:    210 20% 98%;    /* #f8f9fb */
+  --foreground:    220 25% 10%;    /* #151a24 */
+
+  --card:          0 0% 100%;      /* pure white panels */
+  --surface:       210 15% 96%;    /* #f1f3f6 */
+  --surface-hover: 210 15% 92%;
+
+  --border:        215 15% 85%;    /* #d2d7df — clearly visible */
+  --border-strong: 215 15% 75%;
+
+  --muted:         210 15% 93%;
+  --muted-foreground: 215 12% 45%; /* #656e7c */
+
+  --primary:       220 25% 10%;
+  --primary-foreground: 210 20% 98%;
+
+  --accent:        8 82% 46%;      /* red-orange for light bg */
+  --accent-foreground: 0 0% 100%;
+  --accent-subtle: 8 40% 93%;     /* muted accent for light backgrounds */
+
+  --success:       152 55% 38%;
+  --warning:       38 85% 45%;
+  --destructive:   0 72% 50%;
+  --info:          205 75% 48%;
+
+  --ring:          8 82% 46%;
+
+  --scrollbar-thumb: 215 15% 80%;
+  --scrollbar-thumb-hover: 215 15% 68%;
+}
+
+/* ================================================================
+   Base reset & typography
+   ================================================================ */
 
 * {
   box-sizing: border-box;
   border-color: hsl(var(--border));
 }
 
-/* Typography Density - Professional Research Tool */
 html {
   font-size: 13px;
 }
 
-@media (max-width: 768px) {
-  html {
-    font-size: 14px;
-    /* Slightly larger on mobile */
-  }
-}
-
-html,
-body {
+html, body {
   margin: 0;
   padding: 0;
   background: hsl(var(--background));
@@ -76,65 +98,43 @@ body {
 
 body {
   min-height: 100vh;
-  font-family: var(--font-inter), sans-serif;
+  font-family: var(--font-inter), system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-h1,
-h2,
-h3,
-h4,
-h5,
-h6 {
-  font-family: var(--font-serif), serif;
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-inter), system-ui, sans-serif;
+  font-weight: 600;
   letter-spacing: -0.01em;
 }
 
-/* Atlas dot grid background texture */
-.atlas-dot-grid {
-  background-image: radial-gradient(hsl(var(--border)) 0.7px, transparent 0.7px);
-  background-size: 16px 16px;
+/* ================================================================
+   Scrollbars — subtle, consistent
+   ================================================================ */
+
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
 }
 
-/* Gradient text utility */
-.gradient-text {
-  background: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--accent)));
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+::-webkit-scrollbar-track {
+  background: transparent;
 }
 
-/* Subtle glow effects */
-.glow-sm {
-  box-shadow: 0 0 12px -3px hsl(var(--glow) / 0.15);
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--scrollbar-thumb));
+  border-radius: 4px;
 }
 
-.glow-md {
-  box-shadow: 0 0 24px -4px hsl(var(--glow) / 0.2);
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--scrollbar-thumb-hover));
 }
 
-.glow-accent {
-  box-shadow: 0 0 16px -4px hsl(var(--accent) / 0.3);
-}
+/* ================================================================
+   Active tab indicator — clean underline, no gradient gimmicks
+   ================================================================ */
 
-/* Gradient border utility */
-.gradient-border {
-  position: relative;
-}
-
-.gradient-border::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  padding: 1px;
-  background: linear-gradient(135deg, hsl(var(--primary) / 0.4), hsl(var(--accent) / 0.4));
-  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-  mask-composite: exclude;
-  -webkit-mask-composite: xor;
-  pointer-events: none;
-}
-
-/* Active tab indicator gradient */
 .tab-active {
   position: relative;
 }
@@ -143,88 +143,70 @@ h6 {
   content: '';
   position: absolute;
   bottom: 0;
-  left: 8px;
-  right: 8px;
+  left: 0;
+  right: 0;
   height: 2px;
-  background: linear-gradient(90deg, hsl(var(--primary)), hsl(var(--accent)));
-  border-radius: 2px;
+  background: hsl(var(--accent));
+  border-radius: 1px 1px 0 0;
 }
 
-/* Panel resize handles */
+/* ================================================================
+   Panel resize handles
+   ================================================================ */
+
 .resize-handle {
   transition: background-color 150ms ease;
 }
 
 .resize-handle:hover,
 .resize-handle[data-resize-handle-active] {
-  background-color: hsl(var(--accent) / 0.5) !important;
+  background-color: hsl(var(--accent) / 0.4) !important;
 }
 
-/* Scrollbar styling */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+/* ================================================================
+   Animations
+   ================================================================ */
+
+@keyframes pulse-glow {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
 }
 
-::-webkit-scrollbar-track {
-  background: transparent;
+.animate-pulse-glow {
+  animation: pulse-glow 1.5s ease-in-out infinite;
 }
 
-::-webkit-scrollbar-thumb {
-  background: hsl(var(--muted));
-  border-radius: 4px;
-  border: 2px solid transparent;
-  background-clip: padding-box;
+@keyframes slide-in-from-right {
+  from { transform: translateX(100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--muted-foreground) / 0.4);
-  background-clip: padding-box;
+.animate-in {
+  animation: slide-in-from-right 0.3s ease-out;
 }
 
-/* TipTap editor styles */
+/* ================================================================
+   TipTap editor
+   ================================================================ */
+
 .ProseMirror {
   outline: none;
   min-height: 200px;
   padding: 1rem;
 }
 
-.ProseMirror p {
-  margin: 0.5em 0;
-}
-
-.ProseMirror h1,
-.ProseMirror h2,
-.ProseMirror h3 {
-  font-family: var(--font-serif), serif;
-  margin: 1em 0 0.5em;
-}
-
-.ProseMirror h1 {
-  font-size: 1.5em;
-}
-
-.ProseMirror h2 {
-  font-size: 1.25em;
-}
-
-.ProseMirror h3 {
-  font-size: 1.1em;
-}
-
-.ProseMirror ul,
-.ProseMirror ol {
-  padding-left: 1.5em;
-  margin: 0.5em 0;
-}
-
+.ProseMirror p { margin: 0.5em 0; }
+.ProseMirror h1, .ProseMirror h2, .ProseMirror h3 { margin: 1em 0 0.5em; font-weight: 600; }
+.ProseMirror h1 { font-size: 1.5em; }
+.ProseMirror h2 { font-size: 1.25em; }
+.ProseMirror h3 { font-size: 1.1em; }
+.ProseMirror ul, .ProseMirror ol { padding-left: 1.5em; margin: 0.5em 0; }
 .ProseMirror blockquote {
-  border-left: 3px solid hsl(var(--primary) / 0.5);
+  border-left: 3px solid hsl(var(--border-strong));
   padding-left: 1em;
   margin: 0.5em 0;
   color: hsl(var(--muted-foreground));
 }
-
 .ProseMirror code {
   background: hsl(var(--muted));
   padding: 0.1em 0.3em;
@@ -232,19 +214,13 @@ h6 {
   font-family: var(--font-mono), monospace;
   font-size: 0.9em;
 }
-
 .ProseMirror pre {
   background: hsl(var(--muted));
   padding: 0.75em 1em;
   border-radius: 6px;
   overflow-x: auto;
 }
-
-.ProseMirror pre code {
-  background: none;
-  padding: 0;
-}
-
+.ProseMirror pre code { background: none; padding: 0; }
 .ProseMirror .is-editor-empty:first-child::before {
   content: attr(data-placeholder);
   float: left;
@@ -252,99 +228,45 @@ h6 {
   pointer-events: none;
   height: 0;
 }
-
 .ProseMirror mark {
   background-color: hsl(var(--warning) / 0.3);
   border-radius: 2px;
   padding: 0 2px;
 }
-
 .ProseMirror a {
   color: hsl(var(--accent));
   text-decoration: underline;
   text-underline-offset: 2px;
 }
 
-/* Pulse animation for streaming indicator */
-@keyframes pulse-glow {
+/* ================================================================
+   Command palette (cmdk)
+   ================================================================ */
 
-  0%,
-  100% {
-    opacity: 0.4;
-  }
-
-  50% {
-    opacity: 1;
-  }
-}
-
-.animate-pulse-glow {
-  animation: pulse-glow 1.5s ease-in-out infinite;
-}
-
-/* Staggered bounce for loading dots */
-.delay-100 {
-  animation-delay: 100ms;
-}
-
-.delay-200 {
-  animation-delay: 200ms;
-}
-
-/* Toast animations */
-@keyframes slide-in-from-right {
-  from {
-    transform: translateX(100%);
-    opacity: 0;
-  }
-
-  to {
-    transform: translateX(0);
-    opacity: 1;
-  }
-}
-
-.animate-in {
-  animation: slide-in-from-right 0.3s ease-out;
-}
-
-.slide-in-from-right-5 {
-  /* handled by keyframes above */
-}
-
-.fade-in {
-  /* handled by keyframes above */
-}
-
-/* Command Palette (cmdk) Overrides */
-[cmdk-root] {
-  z-index: 200;
-}
-
+[cmdk-root] { z-index: 200; }
 [cmdk-overlay] {
   position: fixed;
   inset: 0;
-  background-color: hsl(var(--background) / 0.5);
+  background-color: hsl(var(--background) / 0.6);
   backdrop-filter: blur(4px);
   z-index: 199;
 }
-
 [cmdk-group-heading] {
   padding: 0.5rem 0.75rem;
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   font-weight: 600;
   color: hsl(var(--muted-foreground));
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
 }
 
 kbd {
   display: inline-block;
-  padding: 0.125rem 0.375rem;
+  padding: 0.1rem 0.35rem;
   font-family: var(--font-mono);
-  font-size: 0.75rem;
-  border-radius: 0.25rem;
-  background-color: hsl(var(--muted));
-  color: hsl(var(--foreground));
+  font-size: 0.7rem;
+  border-radius: 3px;
+  background-color: hsl(var(--surface));
+  color: hsl(var(--muted-foreground));
   border: 1px solid hsl(var(--border));
 }

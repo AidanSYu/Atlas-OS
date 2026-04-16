@@ -8,20 +8,6 @@ export function WindowControls() {
     const [isMaximized, setIsMaximized] = useState(false);
 
     useEffect(() => {
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/bbc8b2ad-e887-4ae4-a28b-fd483f17736b', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'f2888d' },
-            body: JSON.stringify({
-                sessionId: 'f2888d',
-                location: 'WindowControls.tsx:useEffect',
-                message: 'WindowControls mounted (client only)',
-                data: { hasWindow: typeof window !== 'undefined' },
-                timestamp: Date.now(),
-                hypothesisId: 'H2',
-            }),
-        }).catch(() => {});
-        // #endregion
         // Check initial state
         appWindow.isMaximized().then(setIsMaximized);
 

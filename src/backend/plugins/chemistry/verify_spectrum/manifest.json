@@ -1,0 +1,36 @@
+{
+  "schema_version": "1.0",
+  "name": "verify_spectrum",
+  "version": "0.1.0",
+  "description": "Verify an NMR JCAMP-DX spectrum against an optional target structure.",
+  "entry_point": "wrapper.py",
+  "priority": 40,
+  "tags": ["chemistry", "spectroscopy", "nmr"],
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "file_path": {
+        "type": "string",
+        "description": "Path to the .jdx spectrum file."
+      },
+      "smiles": {
+        "type": "string",
+        "description": "Optional target SMILES string."
+      },
+      "tolerance": {
+        "type": "number",
+        "description": "Optional peak matching tolerance in ppm."
+      }
+    },
+    "required": ["file_path"]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "valid": {"type": "boolean"},
+      "peak_count": {"type": "integer"},
+      "match_score": {"type": "number"},
+      "summary": {"type": "string"}
+    }
+  }
+}

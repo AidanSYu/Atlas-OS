@@ -11,11 +11,10 @@ import {
   Home,
   Network,
   MessageSquare,
-  Play,
+  History,
   HelpCircle,
   ChevronRight,
   Layers,
-  FlaskConical,
 } from 'lucide-react';
 
 export interface AppMenuBarProps {
@@ -28,10 +27,7 @@ export interface AppMenuBarProps {
   onExport?: (type: 'bibtex' | 'markdown' | 'chat') => void;
   onOpenSettings?: () => void;
   onSwitchView?: (view: 'document' | 'graph' | 'chat' | 'canvas') => void;
-  onStartDiscovery?: () => void;
-  onRunHitGeneration?: () => void;
-  showDiscoveryActions?: boolean;
-  isPipelineRunning?: boolean;
+  onOpenRunHistory?: () => void;
 }
 
 type MenuId = 'file' | 'edit' | 'view' | 'go' | 'run' | 'help' | null;
@@ -44,10 +40,7 @@ export function AppMenuBar({
   onExport,
   onOpenSettings,
   onSwitchView,
-  onStartDiscovery,
-  onRunHitGeneration,
-  showDiscoveryActions = false,
-  isPipelineRunning = false,
+  onOpenRunHistory,
 }: AppMenuBarProps) {
   const router = useRouter();
   const [openMenu, setOpenMenu] = useState<MenuId>(null);
@@ -206,19 +199,11 @@ export function AppMenuBar({
           {openMenu === 'run' && (
             <div className="absolute left-0 top-full z-[10000] min-w-[220px] rounded border border-border bg-card py-1 shadow-2xl">
               <MenuItem
-                icon={FlaskConical}
-                label="Start Discovery Session"
-                onClick={() => { onStartDiscovery?.(); setOpenMenu(null); }}
+                icon={History}
+                label="Open Run History"
+                onClick={() => { onOpenRunHistory?.(); setOpenMenu(null); }}
                 disabled={!projectId}
               />
-              {showDiscoveryActions && (
-                <MenuItem
-                  icon={Play}
-                  label="Run Hit Generation"
-                  onClick={() => { onRunHitGeneration?.(); setOpenMenu(null); }}
-                  disabled={!projectId || isPipelineRunning}
-                />
-              )}
             </div>
           )}
         </div>

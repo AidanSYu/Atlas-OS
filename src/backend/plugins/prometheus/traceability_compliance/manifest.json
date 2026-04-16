@@ -1,0 +1,65 @@
+{
+  "schema_version": "1.0",
+  "name": "traceability_compliance",
+  "version": "1.0.0",
+  "description": "Generate deterministic provenance evidence bundles and ISO-style compliance reports from knowledge graph walks. Uses W3C PROV-DM semantics for domain-agnostic lineage across manufacturing, biotech, and supply chain.",
+  "entry_point": "wrapper.py",
+  "priority": 80,
+  "tags": ["traceability", "compliance", "provenance", "audit", "graph"],
+  "license": "Apache-2.0",
+  "optional_dependencies": ["prov"],
+  "resource_requirements": {
+    "min_vram_mb": 0,
+    "min_ram_mb": 128,
+    "gpu_required": false,
+    "recommended_vram_mb": 0
+  },
+  "self_test": "python -c \"from plugins.prometheus.traceability_compliance.wrapper import PLUGIN; import asyncio; r=asyncio.run(PLUGIN.invoke({'mode':'self_test'})); assert r.get('valid')\"",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "mode": {
+        "type": "string",
+        "enum": ["trace", "report", "self_test"],
+        "description": "Operation mode: 'trace' extracts provenance bundle, 'report' generates ISO narrative, 'self_test' runs built-in demo."
+      },
+      "root_node_id": {
+        "type": "string",
+        "description": "Starting node ID for the graph walk (e.g. 'board-8842')."
+      },
+      "graph_data": {
+        "type": "object",
+        "description": "Serialized graph: {nodes: [{id, type, metadata}], edges: [{source, target, relation, metadata}]}."
+      },
+      "max_depth": {
+        "type": "integer",
+        "description": "Maximum traversal depth (default 10)."
+      },
+      "domain_profile": {
+        "type": "string",
+        "enum": ["manufacturing", "biotech", "supply_chain", "generic"],
+        "description": "Domain vocabulary mapping (default 'generic')."
+      },
+      "output_format": {
+        "type": "string",
+        "enum": ["json", "provn", "prov_json"],
+        "description": "Serialization format for the provenance document."
+      }
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "valid": {"type": "boolean"},
+      "bundle_id": {"type": "string"},
+      "content_hash": {"type": "string"},
+      "traversal_path": {"type": "array", "items": {"type": "string"}},
+      "evidence_nodes": {"type": "array"},
+      "evidence_edges": {"type": "array"},
+      "prov_document": {"type": "object"},
+      "narrative_report": {"type": "string"},
+      "gaps_detected": {"type": "array"},
+      "summary": {"type": "string"}
+    }
+  }
+}

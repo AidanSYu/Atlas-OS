@@ -5,7 +5,6 @@ from sqlalchemy import func
 
 from app.core.database import get_session, Node, Edge
 
-import networkx as nx
 import asyncio
 from async_lru import alru_cache
 
@@ -145,7 +144,6 @@ class GraphService:
             )
         )
 
-    @alru_cache(maxsize=32, ttl=300)  # Caching for 5 minutes (TTL from config is better)
     @alru_cache(maxsize=32, ttl=300)
     async def get_rustworkx_subgraph(
         self,
@@ -205,7 +203,10 @@ class GraphService:
         """Clear all cached graph data. Call after ingestion completes."""
         try:
             self.get_full_graph_cached.cache_clear()
-            self.get_networkx_subgraph.cache_clear()
+        except Exception:
+            pass
+        try:
+            self.get_rustworkx_subgraph.cache_clear()
         except Exception:
             pass
 

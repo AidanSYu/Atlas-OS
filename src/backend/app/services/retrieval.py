@@ -15,19 +15,17 @@ Production Desktop Sidecar: SQLite + embedded Qdrant + BM25 + bundled LLMs.
 """
 from typing import List, Dict, Any, Optional, Set
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import or_, and_, func
+from sqlalchemy import or_, func
 import json
 import logging
 import asyncio
 
-from app.core.database import get_session, Node, Edge, Document
+from app.core.database import get_session, Node, Edge, Document, DocumentChunk
 from app.core.config import settings
 from app.services.llm import LLMService
 from app.core.qdrant_store import get_qdrant_client
 from app.services.rerank import get_rerank_service
 from app.services.bm25_index import get_bm25_service, rrf_fuse
-from qdrant_client.models import Filter, FieldCondition, MatchValue
-
 logger = logging.getLogger(__name__)
 
 
@@ -87,8 +85,56 @@ If no dates/entities found, return empty arrays."""
         active_docs = session.query(Document).filter(Document.status == "completed").all()
         return {str(doc.id) for doc in active_docs}
 
+    @staticmethod
+    def _build_answer_prompt(
+        user_question: str,
+        context_str: str,
+        mode: str,
+    ) -> tuple[str, str]:
+        if mode == "cortex":
+            system_msg = (
+                "You are Atlas Cortex, a grounded research analyst. Answer only from the "
+                "provided project context. In this chat mode you do not have access to "
+                "plugins, external tools, or task execution. You may synthesize across "
+                "documents and graph relationships, but you must clearly separate direct "
+                "evidence from higher-level inference. If the answer is not in the context, "
+                'say "I cannot find this information in the available documents."'
+            )
+            instructions = [
+                "Base your answer only on the provided context.",
+                "Cite the source document name and page number for every factual claim.",
+                "Use this exact citation format: [Source: filename.pdf, Page: X]",
+                "When you connect ideas across sources or graph relationships, label that as synthesis or inference.",
+                "Do not claim that you can run plugins, experiments, or tools from this chat.",
+            ]
+        else:
+            system_msg = (
+                "You are a precise research librarian. Answer the user's question based "
+                "only on the provided project context. Keep the response concise and "
+                "evidence-led. If you cannot find the answer, say "
+                '"I cannot find this information in the available documents."'
+            )
+            instructions = [
+                "Base your answer only on the provided context.",
+                "Keep the answer concise and directly responsive.",
+                "Cite the source document name and page number for every factual claim.",
+                "Use this exact citation format: [Source: filename.pdf, Page: X]",
+                "Do not claim access to tools, plugins, or capabilities outside document and graph retrieval.",
+            ]
+
+        user_msg = (
+            f"QUESTION: {user_question}\n\n"
+            f"CONTEXT:\n{context_str}\n\n"
+            "CRITICAL INSTRUCTIONS:\n"
+            + "\n".join(f"{index}. {instruction}" for index, instruction in enumerate(instructions, start=1))
+        )
+        return system_msg, user_msg
+
     async def query_atlas(
-        self, user_question: str, project_id: Optional[str] = None
+        self,
+        user_question: str,
+        project_id: Optional[str] = None,
+        mode: str = "librarian",
     ) -> Dict[str, Any]:
         """
         Main retrieval function - implements hybrid RAG workflow.
@@ -125,28 +171,24 @@ If no dates/entities found, return empty arrays."""
                     "context": {"vector_chunks": [], "graph_nodes": [], "graph_edges": []},
                 }
 
-            # Step 1: Vector Search
-            query_embedding = await self._embed_text(user_question)
             loop = asyncio.get_running_loop()
+            vector_results = []
+            try:
+                query_embedding = await self._embed_text(user_question)
 
-            def _qdrant_search():
-                return self.qdrant_client.query_points(
-                    collection_name=self.collection_name,
-                    query=query_embedding,
-                    limit=20,
-                ).points
+                def _qdrant_search():
+                    return self.qdrant_client.query_points(
+                        collection_name=self.collection_name,
+                        query=query_embedding,
+                        limit=20,
+                    ).points
 
-            vector_results = await loop.run_in_executor(None, _qdrant_search)
-            vector_results = [
-                r for r in vector_results if r.payload.get("doc_id") in active_doc_ids
-            ]
-
-            if not vector_results:
-                return {
-                    "status": "no_results",
-                    "answer": "",
-                    "context": {"vector_chunks": [], "graph_nodes": [], "graph_edges": []},
-                }
+                vector_results = await loop.run_in_executor(None, _qdrant_search)
+                vector_results = [
+                    r for r in vector_results if (r.payload or {}).get("doc_id") in active_doc_ids
+                ]
+            except Exception as e:
+                logger.warning(f"Vector search failed (non-fatal): {e}")
 
             # Step 2: Entity-based matching
             entity_matched_chunks = []
@@ -197,44 +239,48 @@ If no dates/entities found, return empty arrays."""
             # Step 3: Exact text matching for dates/key phrases
             exact_matched_chunks = []
             key_phrases = query_info.get('key_phrases', [])
-            search_terms = dates + key_phrases
+            search_terms = [str(term).strip() for term in dates + key_phrases if str(term).strip()]
             if search_terms:
-                seen_exact_chunks: set = set()
-                for doc_id in list(active_doc_ids)[:5]:
+                seen_exact_chunks: set[str] = set()
+                exact_query = (
+                    session.query(DocumentChunk, Document)
+                    .join(Document, DocumentChunk.document_id == Document.id)
+                    .filter(Document.status == "completed")
+                )
+                if project_id:
+                    exact_query = exact_query.filter(Document.project_id == project_id)
+
+                for term in search_terms[:10]:
                     try:
-                        doc_filter = Filter(
-                            must=[FieldCondition(key="doc_id", match=MatchValue(value=doc_id))]
+                        term_matches = (
+                            exact_query
+                            .filter(func.lower(DocumentChunk.text).contains(term.lower()))
+                            .limit(20)
+                            .all()
                         )
-                        scroll_result = await loop.run_in_executor(
-                            None,
-                            lambda: self.qdrant_client.scroll(
-                                collection_name=self.collection_name,
-                                scroll_filter=doc_filter,
-                                limit=200,
-                            ),
-                        )
-                        points, _ = scroll_result
-                        for point in points:
-                            chunk_id = point.id
+
+                        for chunk, document in term_matches:
+                            chunk_id = str(chunk.id)
                             if chunk_id in seen_exact_chunks:
                                 continue
-                            text = point.payload.get("text", "").lower()
-                            for term in search_terms:
-                                if term.lower() in text:
-                                    seen_exact_chunks.add(chunk_id)
-                                    exact_matched_chunks.append(
-                                        {
-                                            "text": point.payload.get("text", ""),
-                                            "doc_id": point.payload.get("doc_id"),
-                                            "metadata": {**point.payload.get("metadata", {}), "chunk_id": str(chunk_id)},
-                                            "relevance_score": 0.98,
-                                            "match_type": "exact",
-                                            "matched_term": term,
-                                        }
-                                    )
-                                    break
+                            seen_exact_chunks.add(chunk_id)
+                            exact_matched_chunks.append(
+                                {
+                                    "text": chunk.text,
+                                    "doc_id": str(document.id),
+                                    "metadata": {
+                                        **(chunk.chunk_metadata or {}),
+                                        "chunk_id": chunk_id,
+                                        "filename": document.filename,
+                                        "page": chunk.page_number,
+                                    },
+                                    "relevance_score": 0.98,
+                                    "match_type": "exact",
+                                    "matched_term": term,
+                                }
+                            )
                     except Exception as e:
-                        logger.debug(f"Error searching document {doc_id}: {e}")
+                        logger.debug(f"Error searching exact matches for term '{term}': {e}")
 
             # Step 3.5 (Atlas 3.0): BM25 sparse keyword search
             bm25_chunks = []
@@ -307,6 +353,12 @@ If no dates/entities found, return empty arrays."""
                 candidate_chunks = sorted(all_chunks.values(), key=lambda x: x["relevance_score"], reverse=True)
 
             candidate_chunks = candidate_chunks[:20]
+            if not candidate_chunks:
+                return {
+                    "status": "no_results",
+                    "answer": "",
+                    "context": {"vector_chunks": [], "graph_nodes": [], "graph_edges": []},
+                }
 
             # Step 4.5: Reranking (Phase B1) - Cross-encoder precision scoring
             if settings.ENABLE_RERANKING and len(candidate_chunks) > 0:
@@ -444,23 +496,12 @@ If no dates/entities found, return empty arrays."""
 
             context_str = "\n".join(context_parts)
 
-            # Step 7: Generate answer using LLM
-            system_msg = (
-                "You are a precise research librarian. Answer the user's question based primarily "
-                "on the provided context. If you cannot find the answer, say "
-                "\"I cannot find this information in the available documents.\""
+            # Step 7: Generate answer using the selected grounded chat mode
+            system_msg, user_msg = self._build_answer_prompt(
+                user_question=user_question,
+                context_str=context_str,
+                mode=mode,
             )
-
-            user_msg = f"""QUESTION: {user_question}
-
-CONTEXT:
-{context_str}
-
-CRITICAL INSTRUCTIONS:
-1. Base your answer primarily on the context provided.
-2. Cite the source document name and page number for EVERY fact.
-3. Use this exact citation format: [Source: filename.pdf, Page: X]
-4. Consolidate citations when multiple sentences come from the same page."""
 
             try:
                 answer = await self.llm_service.generate_chat(

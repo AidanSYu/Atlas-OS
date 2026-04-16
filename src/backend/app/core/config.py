@@ -2,6 +2,10 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
 from pathlib import Path
+import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def _get_backend_dir() -> Path:
@@ -13,8 +17,16 @@ def get_env_path() -> Path:
     return _get_backend_dir().parent.parent / "config" / ".env"
 
 
+def _resolve_config_path(value: str) -> str:
+    """Resolve relative config paths against the backend directory."""
+    path = Path(value)
+    if path.is_absolute():
+        return str(path)
+    return str((_get_backend_dir() / path).resolve())
+
+
 def _get_models_dir() -> str:
-    return str(_get_backend_dir() / "models")
+    return str(_get_backend_dir().parent.parent / "models")
 
 def _get_db_path() -> str:
     return str(_get_backend_dir() / "atlas.db")
@@ -28,6 +40,51 @@ def _get_data_dir() -> str:
 
 def _get_upload_dir() -> str:
     return str(_get_backend_dir() / "data" / "uploads")
+
+
+def _get_plugins_dir() -> str:
+    return str(_get_backend_dir() / "plugins")
+
+
+def _get_domains_dir() -> Path:
+    return _get_backend_dir() / "domains"
+
+
+def _load_domain_profile(domain_name: str) -> dict:
+    """Load base.json + the named domain profile, merging edge_types and entity_labels."""
+    domains_dir = _get_domains_dir()
+    base_path = domains_dir / "base.json"
+
+    edge_types: list[str] = []
+    entity_labels: list[str] = []
+
+    # Always load base
+    if base_path.exists():
+        with open(base_path, "r") as f:
+            base = json.load(f)
+        edge_types.extend(base.get("edge_types", []))
+        entity_labels.extend(base.get("entity_labels", []))
+
+    # Layer the vertical on top (skip if domain_name is "base" or empty)
+    if domain_name and domain_name != "base":
+        vertical_path = domains_dir / f"{domain_name}.json"
+        if vertical_path.exists():
+            with open(vertical_path, "r") as f:
+                vertical = json.load(f)
+            edge_types.extend(vertical.get("edge_types", []))
+            entity_labels.extend(vertical.get("entity_labels", []))
+        else:
+            logger.warning(f"Domain profile '{domain_name}' not found at {vertical_path}")
+
+    # Deduplicate while preserving order
+    seen_e, seen_l = set(), set()
+    edge_types = [t for t in edge_types if not (t in seen_e or seen_e.add(t))]
+    entity_labels = [l for l in entity_labels if not (l in seen_l or seen_l.add(l))]
+
+    return {
+        "edge_types": ",".join(edge_types),
+        "entity_labels": ",".join(entity_labels),
+    }
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
@@ -66,12 +123,12 @@ class Settings(BaseSettings):
     CHUNK_OVERLAP: int = 200
     TOP_K_RETRIEVAL: int = 5
 
-    # Agent Reasoning Configuration (Phase A1: Navigator 2.0)
+    # Legacy reasoning controls kept for compatibility with older configs
     ENABLE_NAVIGATOR_REFLECTION: bool = True  # Enable multi-turn reflection loops
     MAX_REFLECTION_ITERATIONS: int = 3        # Max reflection cycles (prevents infinite loops)
     NAVIGATOR_CONFIDENCE_THRESHOLD: float = 0.75  # Auto-pass threshold for high confidence
 
-    # Cortex Configuration (Phase A2: Cortex 2.0)
+    # Legacy decomposition controls kept for compatibility with older configs
     ENABLE_CORTEX_CROSSCHECK: bool = True  # Enable cross-checking and contradiction detection
     CORTEX_NUM_SUBTASKS: int = 5           # Number of sub-tasks to decompose query into
 
@@ -116,13 +173,18 @@ class Settings(BaseSettings):
     # Default model source preference: "local" or "api"
     DEFAULT_MODEL_SOURCE: str = "local"
 
+    # Atlas Domain Profile — controls ontology and entity labels per vertical
+    # Set to "base" for domain-agnostic, "chemistry" for drug discovery, "manufacturing" for Prometheus, etc.
+    ATLAS_DOMAIN: str = "base"
+
     # Atlas 3.0: GraphRAG Configuration (Phase 2)
-    # Strict ontology for evidence-bound extraction
-    GRAPH_ONTOLOGY_EDGE_TYPES: str = "CAUSES,INHIBITS,ENABLES,PART_OF,RELATED_TO,CONTRADICTS,SUPPORTS,CLINICAL_TRIAL_FOR,TREATS,DIAGNOSES,MEASURED_BY,AUTHORED_BY,PUBLISHED_IN,FUNDED_BY"
+    # Populated at startup from domains/base.json + domains/{ATLAS_DOMAIN}.json
+    GRAPH_ONTOLOGY_EDGE_TYPES: str = "CAUSES,ENABLES,PART_OF,RELATED_TO,CONTRADICTS,SUPPORTS,MEASURED_BY"
+    GRAPH_ENTITY_LABELS: str = "Person,Organization,Location,Concept,Method,Date,Event,Work,Title,Institution"
     ENABLE_EVIDENCE_BOUND_EXTRACTION: bool = True   # Require evidence quotes for edges
     ENABLE_GRAPH_CRITIC: bool = True                 # Validate edges before committing
 
-    # Atlas 3.0: MoE Configuration (Phase 3)
+    # Legacy expert-pipeline controls kept for compatibility with older configs
     MOE_MAX_EXPERT_ROUNDS: int = 5         # Max rounds of expert delegation
     MOE_HYPOTHESIS_COUNT: int = 3          # Number of hypotheses to generate
     ENABLE_AUTONOMOUS_MODE: bool = False   # Allow agents to pursue hypotheses without user approval
@@ -134,6 +196,15 @@ class Settings(BaseSettings):
     MAX_TOOL_ITERATIONS: int = 8           # Max ReAct loop iterations before forced final_answer
     ENABLE_DISCOVERY_MODE: bool = True     # Enable the Discovery OS pipeline
     DISCOVERY_DEFAULT_PHASE: str = "hit_identification"  # Default workflow phase
+
+    # Atlas Framework Configuration
+    ATLAS_PLUGIN_DIR: str = Field(default_factory=_get_plugins_dir)
+    ATLAS_ORCHESTRATOR_MODEL: str = "nvidia_Orchestrator-8B-IQ2_M.gguf"
+    ATLAS_ORCHESTRATOR_CONTEXT_SIZE: int = 32768  # Nemotron supports 131k; 32k balances VRAM vs capacity
+    ATLAS_ORCHESTRATOR_MAX_TOKENS: int = 2048     # Room for <think> reasoning + <tool_call> + text
+    ATLAS_ORCHESTRATOR_MAX_ITERATIONS: int = 12   # Safety bound — model decides when to stop
+    ATLAS_ORCHESTRATOR_TEMPERATURE: float = 0.15
+    ATLAS_ORCHESTRATOR_RESPONSE_MAX_CHARS: int = 8000
 
     # Discovery OS LLM Configuration (Phase 5 - Part 1: Isolated from global model selector)
     # These settings are ONLY used by Discovery OS agents (Coordinator, Executor)
@@ -147,9 +218,30 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
+# Apply domain profile — merges base.json + vertical into ontology settings
+_domain = _load_domain_profile(settings.ATLAS_DOMAIN)
+settings.GRAPH_ONTOLOGY_EDGE_TYPES = _domain["edge_types"]
+settings.GRAPH_ENTITY_LABELS = _domain["entity_labels"]
+logger.info(f"Atlas domain: {settings.ATLAS_DOMAIN} — {len(_domain['edge_types'].split(','))} edge types, {len(_domain['entity_labels'].split(','))} entity labels")
+
+settings.DATABASE_PATH = _resolve_config_path(settings.DATABASE_PATH)
+settings.QDRANT_STORAGE_PATH = _resolve_config_path(settings.QDRANT_STORAGE_PATH)
+settings.MODELS_DIR = _resolve_config_path(settings.MODELS_DIR)
+settings.DATA_DIR = _resolve_config_path(settings.DATA_DIR)
+settings.UPLOAD_DIR = _resolve_config_path(settings.UPLOAD_DIR)
+settings.DRAFTS_DIR = _resolve_config_path(settings.DRAFTS_DIR)
+settings.ATLAS_PLUGIN_DIR = _resolve_config_path(settings.ATLAS_PLUGIN_DIR)
+
+# Prefer the repository-root models directory when an older relative env path
+# resolves to a non-existent location such as src/models.
+_repo_models_dir = (_get_backend_dir().parent.parent / "models").resolve()
+if not Path(settings.MODELS_DIR).exists() and _repo_models_dir.exists():
+    settings.MODELS_DIR = str(_repo_models_dir)
+
 # Ensure directories exist
 Path(settings.DATA_DIR).mkdir(parents=True, exist_ok=True)
 Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
 Path(settings.MODELS_DIR).mkdir(parents=True, exist_ok=True)
 Path(settings.QDRANT_STORAGE_PATH).mkdir(parents=True, exist_ok=True)
 Path(settings.DRAFTS_DIR).mkdir(parents=True, exist_ok=True)
+Path(settings.ATLAS_PLUGIN_DIR).mkdir(parents=True, exist_ok=True)

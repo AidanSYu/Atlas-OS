@@ -13,7 +13,6 @@ import {
   Home,
   BookOpen,
   Brain,
-  Beaker,
   Zap,
   Loader2,
   History,
@@ -28,10 +27,8 @@ import { api } from '@/lib/api';
 
 const MODE_CONFIG: Record<ChatMode, { label: string; icon: typeof BookOpen; color: string; desc: string }> = {
   librarian: { label: 'Librarian', icon: BookOpen, color: 'text-primary', desc: 'Document Q&A with citations' },
-  cortex: { label: 'Cortex', icon: Brain, color: 'text-accent', desc: 'Deep multi-agent research' },
+  cortex: { label: 'Cortex', icon: Brain, color: 'text-accent', desc: 'Deeper grounded graph reasoning' },
   moe: { label: 'MoE', icon: Network, color: 'text-blue-500', desc: 'Expert team synthesis' },
-  discovery: { label: 'Discovery', icon: Beaker, color: 'text-orange-500', desc: 'Chemistry tools & analysis' },
-  coordinator: { label: 'Coordinator', icon: MessageSquare, color: 'text-emerald-500', desc: 'Session bootstrapping' },
 };
 
 const INTENT_TO_MODE: Record<string, ChatMode> = {
@@ -39,7 +36,7 @@ const INTENT_TO_MODE: Record<string, ChatMode> = {
   DEEP_DISCOVERY: 'cortex',
   BROAD_RESEARCH: 'moe',
   MULTI_STEP: 'moe',
-  DISCOVERY: 'discovery',
+  DISCOVERY: 'cortex',
 };
 
 // ---------------------------------------------------------------------------
@@ -197,7 +194,7 @@ export function OmniBar({ projectId, onUpload, onExport, onSwitchView, onSubmitQ
                 }
                 className="mb-1"
               >
-                {(['librarian', 'cortex', 'moe', 'discovery'] as ChatMode[]).map((mode) => {
+                {(['librarian', 'cortex', 'moe'] as ChatMode[]).map((mode) => {
                   const config = MODE_CONFIG[mode];
                   const Icon = config.icon;
                   const isRecommended = detectedMode === mode;

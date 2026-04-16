@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { getApiBase } from '@/lib/api';
 
 interface ContextPayload {
     project_id: string;
@@ -30,7 +31,7 @@ export function useContextEngine(projectId: string | null) {
 
         setIsProcessing(true);
         try {
-            const response = await fetch('http://127.0.0.1:8000/api/context', {
+            const response = await fetch(`${getApiBase()}/api/context`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({

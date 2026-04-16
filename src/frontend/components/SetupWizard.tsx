@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { CheckCircle, XCircle, Loader2, Database, Brain, FolderOpen } from 'lucide-react';
+import { api, getApiBase } from '@/lib/api';
 
 interface SetupStep {
   id: string;
@@ -31,13 +32,13 @@ export function SetupWizard({ onComplete, onSkip }: SetupWizardProps) {
     {
       id: 'database',
       name: 'Connect to Database',
-      description: 'Verifying PostgreSQL connection',
+      description: 'Verifying embedded SQLite database',
       status: 'pending',
     },
     {
       id: 'vector',
       name: 'Connect to Vector Store',
-      description: 'Verifying Qdrant connection',
+      description: 'Verifying embedded Qdrant vector store',
       status: 'pending',
     },
     {
@@ -94,19 +95,33 @@ export function SetupWizard({ onComplete, onSkip }: SetupWizardProps) {
   };
 
   const runStepCheck = async (stepId: string): Promise<void> => {
-    const baseUrl = 'http://127.0.0.1:8000';
-
     switch (stepId) {
-      case 'directories':
-        // Directories are created by the backend on startup
-        await new Promise(resolve => setTimeout(resolve, 500));
+      case 'directories': {
+        const framework = await api.getFrameworkStatus();
+        if (framework.status !== 'ok') {
+          throw new Error(framework.message || 'Framework startup check failed');
+        }
         break;
+      }
 
-      case 'database':
-      case 'vector':
+      case 'database': {
+        const framework = await api.getFrameworkStatus();
+        if (framework.status !== 'ok') {
+          throw new Error(framework.message || 'Database check failed');
+        }
+        break;
+      }
+
+      case 'vector': {
+        const runtime = await api.getFrameworkRuntime();
+        if (runtime.status !== 'ok') {
+          throw new Error('Vector store runtime check failed');
+        }
+        break;
+      }
+
       case 'models': {
-        // Check health endpoint (lightweight - just confirms server is up)
-        const response = await fetch(`${baseUrl}/health`, {
+        const response = await fetch(`${getApiBase()}/models`, {
           method: 'GET',
           headers: { 'Content-Type': 'application/json' },
         });
@@ -116,9 +131,9 @@ export function SetupWizard({ onComplete, onSkip }: SetupWizardProps) {
           throw new Error(data.error || `Service check failed: ${response.status}`);
         }
         
-        const health = await response.json();
-        if (health.status !== 'healthy') {
-          throw new Error(`Service unhealthy: ${JSON.stringify(health)}`);
+        const inventory = await response.json();
+        if (!inventory.models_dir) {
+          throw new Error(`Model inventory unavailable: ${JSON.stringify(inventory)}`);
         }
         break;
       }

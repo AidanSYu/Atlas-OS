@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { getApiBase } from '@/lib/api';
 import type { DomainSchema } from '../lib/discovery-types';
 
 // Module-level LRU cache for SVG preview blob URLs.
@@ -45,13 +46,6 @@ export interface EntityHotspotProps {
   entityType: EntityHotspotType;
   domain?: DomainSchema;
   children: React.ReactNode;
-}
-
-function getApiBase(): string {
-  if (typeof window === 'undefined') return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-  return (window as unknown as { __TAURI__?: unknown }).__TAURI__
-    ? 'http://127.0.0.1:8000'
-    : (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000');
 }
 
 export function EntityHotspot({ entity, entityType, children }: EntityHotspotProps) {

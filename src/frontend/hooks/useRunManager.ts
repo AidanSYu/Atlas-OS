@@ -1,17 +1,13 @@
 /**
- * useRunManager — Orchestration hook for the run lifecycle.
+ * useRunManager - lightweight run hook for grounded chat and task execution.
  *
- * Manages the full state machine for a single query execution: routing,
- * streaming, tool tracking, completion, failure, cancellation, and retry.
- *
- * Phase 3: Now owns streaming dispatch via streamSSE. ChatShell delegates
- * all query execution here.
+ * Librarian/Cortex stay on the grounded chat path, while heavier execution
+ * modes can still use the framework orchestrator when needed.
  */
 import { useCallback, useRef } from 'react';
-import { useRunStore, type Run, type RunStatus, type ToolInvocation } from '@/stores/runStore';
+import { useRunStore, type Run } from '@/stores/runStore';
 import { useDiscoveryStore } from '@/stores/discoveryStore';
-import { streamSSE, type NormalizedEvent, type FailureCategory } from '@/lib/stream-adapter';
-import { api, getApiBase } from '@/lib/api';
+import { api } from '@/lib/api';
 import type {
   StageContextBundle,
   StageArtifactSummary,
@@ -25,7 +21,7 @@ export type ChatMode = 'librarian' | 'cortex' | 'moe';
 const INTENT_TO_MODE: Record<string, ChatMode> = {
   SIMPLE: 'librarian',
   DEEP_DISCOVERY: 'cortex',
-  BROAD_RESEARCH: 'cortex',
+  BROAD_RESEARCH: 'moe',
   MULTI_STEP: 'moe',
 };
 
@@ -33,18 +29,12 @@ export function intentToMode(intent: string): ChatMode {
   return INTENT_TO_MODE[intent] || 'cortex';
 }
 
-// ---------------------------------------------------------------------------
-// Cross-Store Bridge: getStageContext()
-// ---------------------------------------------------------------------------
-
 const MAX_PREVIEW_CHARS = 500;
 
 function truncateJson(value: any): string {
   try {
     const str = typeof value === 'string' ? value : JSON.stringify(value);
-    return str.length > MAX_PREVIEW_CHARS
-      ? str.slice(0, MAX_PREVIEW_CHARS) + '…'
-      : str;
+    return str.length > MAX_PREVIEW_CHARS ? str.slice(0, MAX_PREVIEW_CHARS) + '...' : str;
   } catch {
     return String(value).slice(0, MAX_PREVIEW_CHARS);
   }
@@ -58,7 +48,7 @@ function buildArtifactSummary(
     case 'hit_grid':
       return {
         type: 'hit_grid',
-        label: `Hit Grid — ${artifact.hits.length} candidates`,
+        label: `Hit Grid - ${artifact.hits.length} candidates`,
         candidateCount: artifact.hits.length,
       };
     case 'corpus_viewer':
@@ -76,105 +66,38 @@ function buildArtifactSummary(
   }
 }
 
-/**
- * Read the current Discovery OS state and assemble a StageContextBundle.
- *
- * Returns `null` when no discovery session is active, which means the
- * chat should behave exactly as it does today (no stage_context in the
- * request body).
- */
 export function getStageContext(): StageContextBundle | null {
-  const disco = useDiscoveryStore.getState();
-  const epoch = disco.activeEpochId ? disco.epochs.get(disco.activeEpochId) ?? null : null;
-
+  const discovery = useDiscoveryStore.getState();
+  const epoch = discovery.activeEpochId ? discovery.epochs.get(discovery.activeEpochId) ?? null : null;
   if (!epoch) return null;
 
-  // Grab the last 10 completed tool invocations from the run store
   const runState = useRunStore.getState();
   const recentToolInvocations: TruncatedToolInvocation[] = (
     runState.currentRun?.toolInvocations ?? []
   )
-    .filter((t) => t.status === 'completed' || t.status === 'failed')
+    .filter((tool) => tool.status === 'completed' || tool.status === 'failed')
     .slice(-10)
-    .map((t) => ({
-      tool: t.tool,
-      inputPreview: truncateJson(t.input),
-      outputPreview: truncateJson(t.output),
-      status: t.status as 'completed' | 'failed',
+    .map((tool) => ({
+      tool: tool.tool,
+      inputPreview: truncateJson(tool.input),
+      outputPreview: truncateJson(tool.output),
+      status: tool.status as 'completed' | 'failed',
     }));
 
-  // Determine focused candidate (first approved, or first pending)
   const focused: CandidateArtifact | null =
-    epoch.candidates.find((c) => c.status === 'approved') ??
-    epoch.candidates.find((c) => c.status === 'pending') ??
+    epoch.candidates.find((candidate) => candidate.status === 'approved') ??
+    epoch.candidates.find((candidate) => candidate.status === 'pending') ??
     null;
-
-  const artifact = disco.activeStageArtifact;
 
   return {
     activeEpochId: epoch.id,
     activeStage: epoch.currentStage as GoldenPathStage,
     targetParams: epoch.targetParams,
-    activeArtifact: buildArtifactSummary(artifact),
+    activeArtifact: buildArtifactSummary(discovery.activeStageArtifact),
     focusedCandidateId: focused?.id ?? null,
     focusedCandidate: focused,
     recentToolInvocations,
   };
-}
-
-// ---------------------------------------------------------------------------
-// Streaming endpoint configuration
-// ---------------------------------------------------------------------------
-
-interface StreamEndpoint {
-  url: string;
-  body: Record<string, any>;
-}
-
-function getStreamEndpoint(
-  mode: ChatMode,
-  query: string,
-  projectId: string,
-  sessionId?: string,
-  spectrumFilePath?: string,
-  isMoeHypotheses?: boolean,
-): StreamEndpoint {
-  const base = getApiBase();
-  const stageContext = getStageContext();
-  const commonBody: Record<string, any> = {
-    query,
-    project_id: projectId,
-    session_id: sessionId,
-  };
-  if (stageContext) commonBody.stage_context = stageContext;
-
-  switch (mode) {
-    case 'cortex':
-      return { url: `${base}/api/swarm/stream`, body: commonBody };
-    case 'moe':
-      return isMoeHypotheses
-        ? { url: `${base}/api/moe/hypotheses`, body: commonBody }
-        : { url: `${base}/api/moe/stream`, body: commonBody };
-    default:
-      return { url: `${base}/api/swarm/stream`, body: commonBody };
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Progress callback type — bridges NormalizedEvent to legacy StreamProgress
-// ---------------------------------------------------------------------------
-
-export type OnProgressCallback = (event: NormalizedEvent) => void;
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
-export interface SubmitOptions {
-  sessionId?: string;
-  spectrumFilePath?: string;
-  isMoeHypotheses?: boolean;
-  onProgress?: OnProgressCallback;
 }
 
 export interface SubmitResult {
@@ -186,42 +109,52 @@ export interface RunManagerAPI {
   currentRun: Run | null;
   isRunning: boolean;
   abortSignal: AbortSignal | null;
-
   startRun: (query: string, mode: ChatMode, intent?: string) => Run;
-  handleEvent: (event: NormalizedEvent) => void;
   cancelCurrentRun: () => void;
   retryRun: (run: Run) => Run;
-
-  /** Assemble current Discovery OS state for the backend. Returns null when no session is active. */
   getStageContext: () => StageContextBundle | null;
+  submitQuery: (query: string, mode: ChatMode) => Promise<SubmitResult>;
+  submitLibrarian: (query: string) => Promise<any>;
+}
 
-  submitQuery: (
-    query: string,
-    mode: ChatMode,
-    options?: SubmitOptions,
-  ) => Promise<SubmitResult>;
+function buildModeInstructions(mode: ChatMode): string {
+  switch (mode) {
+    case 'librarian':
+      return 'Prefer grounded retrieval first. Keep the answer concise and evidence-led.';
+    case 'moe':
+      return 'Synthesize across retrieved evidence and optional tools before answering.';
+    default:
+      return 'Use multiple tool steps when helpful, especially graph traversal and grounded retrieval.';
+  }
+}
 
-  submitLibrarian: (
-    query: string,
-    projectId: string,
-    signal: AbortSignal,
-  ) => Promise<any>;
+function buildConversation(mode: ChatMode, stageContext: StageContextBundle | null): Array<{ role: string; content: string }> {
+  const conversation: Array<{ role: string; content: string }> = [
+    { role: 'system', content: buildModeInstructions(mode) },
+  ];
+
+  if (stageContext) {
+    conversation.push({
+      role: 'system',
+      content: `Current research stage context:\n${JSON.stringify(stageContext)}`,
+    });
+  }
+
+  return conversation;
 }
 
 export function useRunManager(projectId: string): RunManagerAPI {
   const abortRef = useRef<AbortController | null>(null);
 
-  const {
-    currentRun,
-    createRun,
-    updateRunStatus,
-    appendEvent,
-    addToolInvocation,
-    updateToolInvocation,
-    completeRun,
-    failRun,
-    cancelRun,
-  } = useRunStore();
+  const currentRun = useRunStore((s) => s.currentRun);
+  const createRun = useRunStore((s) => s.createRun);
+  const updateRunStatus = useRunStore((s) => s.updateRunStatus);
+  const appendEvent = useRunStore((s) => s.appendEvent);
+  const addToolInvocation = useRunStore((s) => s.addToolInvocation);
+  const updateToolInvocation = useRunStore((s) => s.updateToolInvocation);
+  const completeRun = useRunStore((s) => s.completeRun);
+  const failRun = useRunStore((s) => s.failRun);
+  const cancelRun = useRunStore((s) => s.cancelRun);
 
   const isRunning = currentRun !== null &&
     !['completed', 'failed', 'cancelled', 'awaiting_input'].includes(currentRun.status);
@@ -238,69 +171,9 @@ export function useRunManager(projectId: string): RunManagerAPI {
     });
 
     updateRunStatus(run.id, 'routing');
+    appendEvent(run.id, { type: 'routing', mode, intent: intent || mode.toUpperCase() });
     return run;
-  }, [projectId, createRun, updateRunStatus]);
-
-  const handleEvent = useCallback((event: NormalizedEvent) => {
-    const run = useRunStore.getState().currentRun;
-    if (!run) return;
-
-    appendEvent(run.id, event);
-
-    switch (event.type) {
-      case 'routing':
-        updateRunStatus(run.id, 'running');
-        break;
-
-      case 'tool_call':
-        addToolInvocation(run.id, {
-          tool: event.tool,
-          input: event.input,
-          output: null,
-          startedAt: Date.now(),
-          completedAt: null,
-          status: 'running',
-        });
-        break;
-
-      case 'tool_result':
-        updateToolInvocation(run.id, event.tool, {
-          output: event.output,
-          completedAt: Date.now(),
-          status: 'completed',
-        });
-        break;
-
-      case 'hypotheses':
-        updateRunStatus(run.id, 'awaiting_input');
-        break;
-
-      case 'coordinator_question':
-        updateRunStatus(run.id, 'awaiting_input');
-        break;
-
-      case 'coordinator_complete':
-        completeRun(run.id, {
-          extractedGoals: event.extractedGoals,
-          summary: event.summary,
-          corpusEntities: event.corpusEntities,
-          corpusSummary: event.corpusSummary,
-        });
-        break;
-
-      case 'complete':
-        completeRun(run.id, event.result);
-        break;
-
-      case 'error':
-        failRun(run.id, event.message, event.category);
-        break;
-
-      case 'cancelled':
-        cancelRun(run.id);
-        break;
-    }
-  }, [appendEvent, updateRunStatus, addToolInvocation, updateToolInvocation, completeRun, failRun, cancelRun]);
+  }, [appendEvent, createRun, projectId, updateRunStatus]);
 
   const cancelCurrentRun = useCallback(() => {
     abortRef.current?.abort();
@@ -315,107 +188,116 @@ export function useRunManager(projectId: string): RunManagerAPI {
     return startRun(run.query, run.mode, run.intent);
   }, [startRun]);
 
-  // -------------------------------------------------------------------------
-  // submitQuery — streaming dispatch for cortex, moe, discovery
-  // -------------------------------------------------------------------------
-
-  const submitQuery = useCallback(async (
-    query: string,
-    mode: ChatMode,
-    options?: SubmitOptions,
-  ): Promise<SubmitResult> => {
+  const submitQuery = useCallback(async (query: string, mode: ChatMode): Promise<SubmitResult> => {
     const run = startRun(query, mode);
-    const signal = abortRef.current!.signal;
+    const signal = abortRef.current?.signal ?? null;
+    updateRunStatus(run.id, 'running');
 
-    const endpoint = getStreamEndpoint(
-      mode,
-      query,
-      projectId,
-      options?.sessionId,
-      options?.spectrumFilePath,
-      options?.isMoeHypotheses,
-    );
-
-    return new Promise<SubmitResult>((resolve, reject) => {
-      let finalResult: any = null;
-      let wasCancelled = false;
-
-      const onEvent = (event: NormalizedEvent) => {
-        handleEvent(event);
-        options?.onProgress?.(event);
-
-        switch (event.type) {
-          case 'complete':
-            finalResult = event.result;
-            resolve({ result: finalResult, cancelled: false });
-            break;
-          case 'cancelled':
-            wasCancelled = true;
-            resolve({ result: null, cancelled: true });
-            break;
-          case 'error':
-            reject(new Error(event.message));
-            break;
-          case 'hypotheses':
-            resolve({ result: event, cancelled: false });
-            break;
-          case 'coordinator_question':
-            resolve({ result: event, cancelled: false });
-            break;
-          case 'coordinator_complete':
-            finalResult = event;
-            resolve({ result: event, cancelled: false });
-            break;
-        }
-      };
-
-      streamSSE(endpoint.url, endpoint.body, onEvent, { signal, timeout: 300_000 })
-        .then(() => {
-          if (!finalResult && !wasCancelled) {
-            const currentState = useRunStore.getState().currentRun;
-            if (currentState && !['completed', 'failed', 'cancelled'].includes(currentState.status)) {
-              resolve({ result: null, cancelled: false });
-            }
-          }
-        })
-        .catch((err) => {
-          if (err?.name !== 'AbortError') {
-            reject(err);
-          }
-        });
-    });
-  }, [projectId, startRun, handleEvent]);
-
-  // -------------------------------------------------------------------------
-  // submitLibrarian — non-streaming librarian (uses api.chat)
-  // -------------------------------------------------------------------------
-
-  const submitLibrarian = useCallback(async (
-    query: string,
-    librarianProjectId: string,
-    signal: AbortSignal,
-  ): Promise<any> => {
-    const run = startRun(query, 'librarian', 'SIMPLE');
     try {
-      const response = await api.chat(query, librarianProjectId, signal, getStageContext());
-      completeRun(run.id, response);
-      return response;
-    } catch (err: any) {
-      if (err?.name === 'AbortError') {
-        cancelRun(run.id);
-        throw err;
+      if (mode === 'librarian' || mode === 'cortex') {
+        appendEvent(run.id, {
+          type: 'progress',
+          node: 'retrieval',
+          message: mode === 'cortex'
+            ? 'Reviewing relevant passages and graph context'
+            : 'Searching the project corpus',
+        });
+
+        const result = await api.chat(
+          query,
+          projectId,
+          signal ?? undefined,
+          getStageContext(),
+          mode,
+        );
+
+        appendEvent(run.id, { type: 'thinking', content: result.reasoning });
+        appendEvent(run.id, { type: 'evidence', count: result.citations?.length ?? 0 });
+        if (result.relationships && result.relationships.length > 0) {
+          appendEvent(run.id, { type: 'graph_analysis', data: { relationships: result.relationships } });
+        }
+
+        completeRun(run.id, result);
+        return { result, cancelled: false };
       }
-      failRun(run.id, err?.message || 'Unknown error', 'backend_runtime');
-      throw err;
+
+      const result = await api.runFramework({
+        prompt: query,
+        project_id: projectId,
+        conversation: buildConversation(mode, getStageContext()),
+      }, signal ?? undefined);
+
+      const eventBaseTime = Date.now();
+      (result.trace || []).forEach((step, index) => {
+        if (step.thinking) {
+          appendEvent(run.id, { type: 'thinking', content: step.thinking });
+        }
+
+        const toolCalls = step.tool_calls || [];
+        const toolResults = step.tool_results || [];
+
+        toolCalls.forEach((toolCall, callIndex) => {
+          const startedAt = eventBaseTime + (index * 100) + callIndex;
+          const toolResult = toolResults[callIndex] || {};
+
+          addToolInvocation(run.id, {
+            tool: toolCall.name,
+            input: toolCall.arguments || {},
+            output: null,
+            startedAt,
+            completedAt: null,
+            status: 'running',
+          });
+          appendEvent(run.id, {
+            type: 'tool_call',
+            tool: toolCall.name,
+            input: toolCall.arguments || {},
+          });
+          updateToolInvocation(run.id, toolCall.name, {
+            output: toolResult,
+            completedAt: startedAt + 1,
+            status: toolResult?.error ? 'failed' : 'completed',
+          });
+          appendEvent(run.id, {
+            type: 'tool_result',
+            tool: toolCall.name,
+            output: toolResult,
+          });
+        });
+      });
+
+      completeRun(run.id, result);
+      return { result, cancelled: false };
+    } catch (error: any) {
+      if (signal?.aborted || error?.name === 'AbortError') {
+        cancelRun(run.id);
+        return { result: null, cancelled: true };
+      }
+      failRun(run.id, error?.message || 'Framework query failed', 'backend_runtime');
+      throw error;
     }
-  }, [startRun, completeRun, cancelRun, failRun]);
+  }, [
+    addToolInvocation,
+    appendEvent,
+    cancelRun,
+    completeRun,
+    failRun,
+    projectId,
+    startRun,
+    updateRunStatus,
+    updateToolInvocation,
+  ]);
+
+  const submitLibrarian = useCallback(async (query: string): Promise<any> => {
+    const response = await submitQuery(query, 'librarian');
+    return response.result;
+  }, [submitQuery]);
 
   return {
     currentRun,
     isRunning,
     abortSignal: abortRef.current?.signal ?? null,
     startRun,
-    handleEvent,
     cancelCurrentRun,
     retryRun,
     getStageContext,

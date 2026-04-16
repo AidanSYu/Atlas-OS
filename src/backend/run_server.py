@@ -1,8 +1,8 @@
 """
-Atlas Backend Server Entry Point
+Atlas Framework backend server entry point.
 
-This is the main entry point for the PyInstaller-bundled backend.
-It starts the FastAPI server with uvicorn.
+This launches the FastAPI sidecar used by both local development and the
+bundled desktop application.
 """
 import os
 # Force disable hugging face symlinks to prevent WinError 1314 before any imports happen
@@ -65,10 +65,7 @@ def setup_environment():
         os.environ.setdefault('QDRANT_STORAGE_PATH', str(qdrant_dir))
         logger.info(f"Using Qdrant storage: {qdrant_dir}")
     else:
-        # Dev: models live in repo root (parent of backend/)
-        # Dev: models live in repo root (parent of parent of parent of backend/)
-        # Current file: src/backend/run_server.py
-        # Root is 3 dirs up
+        # Dev: models live in the repo-root models/ directory.
         dev_models = Path(__file__).resolve().parent.parent.parent / "models"
         os.environ.setdefault("MODELS_DIR", str(dev_models))
         logger.info(f"Using dev models from: {dev_models}")
@@ -89,6 +86,8 @@ def main():
     logger.info(f"Python: {sys.version}")
     logger.info(f"Working directory: {os.getcwd()}")
     logger.info(f"Binding to http://{host}:{port}")
+    logger.info(f"Framework health endpoint: http://{host}:{port}/api/framework/health")
+    logger.info(f"Framework tools endpoint: http://{host}:{port}/api/framework/tools")
 
     # Import the app after environment setup
     from app.main import app
