@@ -309,6 +309,36 @@ export interface FrameworkPluginInvokeResponse {
   result: Record<string, any>;
 }
 
+export interface MwmShadowReplayRequest {
+  values: number[];
+  threshold_high?: number | null;
+  threshold_low?: number | null;
+  confidence?: number;
+  backend?: string;
+  adapter_path?: string | null;
+}
+
+export interface MwmShadowReplayResponse {
+  ok: boolean;
+  summary?: string | null;
+  narration?: string | null;
+  error?: string | null;
+  n_points?: number | null;
+  threshold_high?: number | null;
+  threshold_low?: number | null;
+  confidence?: number | null;
+  backend_used?: string | null;
+  first_mwm_alert?: number | null;
+  first_threshold_alert?: number | null;
+  advance_warning_points?: number | null;
+  mwm_flagged_indices: number[];
+  threshold_breach_indices: number[];
+  changepoints: number[];
+  anomaly_scores: number[];
+  forecast?: { median: number[]; lower: number[]; upper: number[]; horizon: number } | null;
+  prediction_intervals?: Record<string, any> | null;
+}
+
 export interface FrameworkDependencyStatus {
   package: string;
   import_name: string;
@@ -595,6 +625,49 @@ export const api = {
     const response = await fetchWithTimeout(`${API_BASE_URL}/projects/${encodeURIComponent(projectId)}`, {
       method: 'DELETE',
     });
+    return handleResponse(response);
+  },
+
+  // ---- Managed Workspace Folders (AppData-rooted) ----
+
+  async getWorkspaceFolder(projectId: string): Promise<{
+    workspace_id: string;
+    path: string;
+    files_path: string;
+    drafts_path: string;
+    manifest: Record<string, any> | null;
+  }> {
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/api/workspaces/${encodeURIComponent(projectId)}/folder`
+    );
+    return handleResponse(response);
+  },
+
+  async exportWorkspace(projectId: string): Promise<{ blob: Blob; filename: string }> {
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/api/workspaces/${encodeURIComponent(projectId)}/export`,
+      {},
+      SWARM_TIMEOUT,
+    );
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ detail: response.statusText }));
+      throw new Error(`Export failed: ${err.detail || response.statusText}`);
+    }
+    const disposition = response.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename="?([^";]+)"?/i);
+    const filename = match ? match[1] : `${projectId}.atlas`;
+    const blob = await response.blob();
+    return { blob, filename };
+  },
+
+  async importWorkspace(file: File): Promise<ProjectInfo> {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/api/workspaces/import`,
+      { method: 'POST', body: formData },
+      SWARM_TIMEOUT,
+    );
     return handleResponse(response);
   },
 
@@ -1412,6 +1485,21 @@ export const api = {
       `${API_BASE_URL}/api/framework/demos/prometheus/run-all`,
       {
         method: 'POST',
+      },
+      SWARM_TIMEOUT,
+    );
+    return handleResponse(response);
+  },
+
+  async runMwmShadowReplay(
+    payload: MwmShadowReplayRequest,
+  ): Promise<MwmShadowReplayResponse> {
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/api/framework/plugins/manufacturing_world_model/shadow-replay`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
       },
       SWARM_TIMEOUT,
     );

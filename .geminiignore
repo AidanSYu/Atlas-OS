@@ -1,0 +1,23 @@
+# Large AI Models
+models/
+*.gguf
+*.bin
+*.pt
+*.pth
+*.onnx
+*.hdf5
+
+# Dependencies
+.venv/
+node_modules/
+__pycache__/
+
+# Databases
+*.db
+*.sqlite
+data/
+
+# Installers
+installers/
+*.exe
+*.msi

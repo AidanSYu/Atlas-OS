@@ -15,6 +15,9 @@
 prov>=2.0.1
 
 # Manufacturing world model
+# TimesFM 2.5 is the flagship backend. Install from GitHub until the PyPI release ships:
+#   pip install git+https://github.com/google-research/timesfm.git
+# timesfm  # uncomment once the PyPI package is published
 statsforecast>=1.7.8
 ruptures>=1.1.9
 
@@ -32,3 +35,11 @@ anomalib>=1.2.0
 lightning>=2.4.0
 bitsandbytes>=0.43.3
 qwen-vl-utils>=0.0.8
+
+# Vision alignment pipeline (SFT + DPO for Qwen2-VL)
+# dpo_finetune.py post-trains a LoRA adapter that collapses the VLM's
+# chat output to the strict `DEFECT:<>|CONFIDENCE:<>|LOCATION:<>` format
+# required on a production SMT line. The synthetic dataset is produced by
+# physics_simulator (C3) + vision_inspector/synthetic_renderer.
+peft>=0.11.0
+accelerate>=0.33.0

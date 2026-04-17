@@ -152,8 +152,10 @@ class PhysicsSimulatorWrapper:
             return await loop.run_in_executor(None, self._train, args)
         elif mode == "predict":
             return await loop.run_in_executor(None, self._predict, args)
+        elif mode == "reflow_defect_physics":
+            return await loop.run_in_executor(None, self._reflow_defect_physics, args)
         else:
-            return {"error": f"Unknown mode '{mode}'. Use 'predict', 'train', or 'self_test'."}
+            return {"error": f"Unknown mode '{mode}'. Use 'predict', 'train', 'self_test', or 'reflow_defect_physics'."}
 
     # ----- resolve model type ---------------------------------------------
     @staticmethod
@@ -503,6 +505,185 @@ class PhysicsSimulatorWrapper:
                 f"Test prediction mean uncertainty: {float(std_pred.mean()):.4f}. "
                 f"In-distribution OOD score: {ood_dist_normal:.2f} ({'REJECTED' if ood_flag_normal else 'accepted'}). "
                 f"Wild OOD score: {ood_dist_wild:.2f} ({'REJECTED' if ood_flag_wild else 'accepted'})."
+            ),
+        }
+
+
+    # ----- reflow defect physics -----------------------------------------
+    # SAC305 reference thresholds (Celsius + seconds). Source: IPC J-STD-020.
+    # These drive the physics-consistent defect labels below.
+    _LIQUIDUS_C = 217.0
+    _PEAK_MIN_C = 235.0          # below this, wetting is incomplete -> cold joint
+    _PEAK_MAX_C = 260.0          # above this, component damage / overshoot
+    _TAL_MIN_S = 40.0             # time above liquidus minimum for good joints
+    _TAL_MAX_S = 90.0             # excessive TAL -> intermetallic growth + voids
+    _RAMP_MAX_C_PER_S = 3.0       # thermal shock threshold
+
+    @staticmethod
+    def _simulate_reflow_curve(
+        peak_c: float,
+        tal_s: float,
+        ramp_c_per_s: float,
+        duration_s: float = 300.0,
+        dt_s: float = 1.0,
+    ) -> "np.ndarray":
+        """Generate a SAC305-shaped reflow curve from three physics knobs.
+
+        The curve is piecewise-linear with four segments (preheat, soak,
+        reflow-up + optional peak-hold, reflow-down), so `max |dT/dt|` exactly
+        equals the requested `ramp_c_per_s`. TAL equals the requested `tal_s`
+        as long as the peak is tall enough to contain it; otherwise TAL is
+        capped at `2*(peak_c - liquidus)/ramp_c_per_s` (the physics ceiling).
+        """
+        n = max(2, int(duration_s / dt_s))
+        t = np.arange(n, dtype=np.float32) * dt_s
+        ambient_c = 25.0
+        soak_c = 160.0
+        soak_duration_s = 90.0
+        ramp = max(ramp_c_per_s, 0.05)
+        liq = PhysicsSimulatorWrapper._LIQUIDUS_C
+
+        # Segment durations.
+        preheat_s = max(0.0, (soak_c - ambient_c) / ramp)
+        up_s = max(0.0, (peak_c - soak_c) / ramp) if peak_c > soak_c else 0.0
+        down_s = max(0.0, (peak_c - ambient_c) / ramp) if peak_c > ambient_c else 0.0
+        # Triangular TAL if no hold (TAL = 2 * (peak - liq)/ramp).
+        triangle_tal_s = max(0.0, 2.0 * (peak_c - liq) / ramp) if peak_c > liq else 0.0
+        hold_s = max(0.0, tal_s - triangle_tal_s)
+
+        # Segment boundaries (cumulative time).
+        t_preheat_end = preheat_s
+        t_soak_end = t_preheat_end + soak_duration_s
+        t_up_end = t_soak_end + up_s
+        t_hold_end = t_up_end + hold_s
+        t_down_end = t_hold_end + down_s
+
+        curve = np.full(n, ambient_c, dtype=np.float32)
+        for i, ti in enumerate(t):
+            if ti <= t_preheat_end:
+                curve[i] = ambient_c + ramp * ti
+            elif ti <= t_soak_end:
+                curve[i] = soak_c
+            elif ti <= t_up_end:
+                curve[i] = soak_c + ramp * (ti - t_soak_end)
+            elif ti <= t_hold_end:
+                curve[i] = peak_c
+            elif ti <= t_down_end:
+                curve[i] = peak_c - ramp * (ti - t_hold_end)
+            else:
+                curve[i] = ambient_c
+        return curve
+
+    @staticmethod
+    def _classify_reflow_curve(curve: "np.ndarray", dt_s: float = 1.0) -> Dict[str, Any]:
+        """Return the defect label + evidence derived purely from the curve.
+
+        This is the physics ground truth that the renderer and the VLM alignment
+        pipeline both consume. We grade against SAC305 thresholds.
+        """
+        peak_c = float(curve.max())
+        above_liq = curve >= PhysicsSimulatorWrapper._LIQUIDUS_C
+        tal_s = float(above_liq.sum() * dt_s)
+        # Peak ramp rate across the whole curve (both directions).
+        ramp = np.abs(np.diff(curve)) / dt_s
+        max_ramp = float(ramp.max()) if len(ramp) else 0.0
+
+        labels: List[str] = []
+        if peak_c < PhysicsSimulatorWrapper._PEAK_MIN_C:
+            labels.append("cold_joint")
+        if peak_c > PhysicsSimulatorWrapper._PEAK_MAX_C:
+            labels.append("overshoot_damage")
+        if tal_s < PhysicsSimulatorWrapper._TAL_MIN_S and peak_c >= PhysicsSimulatorWrapper._LIQUIDUS_C:
+            labels.append("insufficient_wetting")
+        if tal_s > PhysicsSimulatorWrapper._TAL_MAX_S:
+            labels.append("excessive_tal_voids")
+        if max_ramp > PhysicsSimulatorWrapper._RAMP_MAX_C_PER_S:
+            labels.append("thermal_shock_tombstone")
+
+        primary = labels[0] if labels else "pass"
+        return {
+            "primary_defect": primary,
+            "all_defect_labels": labels,
+            "peak_c": round(peak_c, 2),
+            "time_above_liquidus_s": round(tal_s, 2),
+            "max_ramp_c_per_s": round(max_ramp, 3),
+            "pass_conditions_met": not labels,
+        }
+
+    def _reflow_defect_physics(self, args: dict) -> dict:
+        """Generate a batch of parametrised reflow profiles + physics labels.
+
+        Callers feed `count` and optional `profile_spec` (a list of explicit
+        peak/tal/ramp triples). Omitted entries are drawn from a deterministic
+        grid that covers the good envelope plus each injected failure mode.
+        """
+        count = int(args.get("count", 12))
+        seed = int(args.get("seed", 17))
+        rng = np.random.default_rng(seed)
+        dt_s = float(args.get("dt_s", 1.0))
+        duration_s = float(args.get("duration_s", 300.0))
+
+        explicit: List[Dict[str, float]] = list(args.get("profile_spec") or [])
+        # Defect mix — even coverage across pass + each failure mode so the
+        # downstream DPO dataset is balanced.
+        mix_templates = [
+            {"kind": "pass", "peak_c": 245.0, "tal_s": 60.0, "ramp_c_per_s": 1.5},
+            {"kind": "cold_joint", "peak_c": 225.0, "tal_s": 30.0, "ramp_c_per_s": 1.5},
+            {"kind": "overshoot_damage", "peak_c": 272.0, "tal_s": 65.0, "ramp_c_per_s": 1.8},
+            {"kind": "insufficient_wetting", "peak_c": 230.0, "tal_s": 18.0, "ramp_c_per_s": 1.5},
+            {"kind": "excessive_tal_voids", "peak_c": 250.0, "tal_s": 110.0, "ramp_c_per_s": 1.5},
+            {"kind": "thermal_shock_tombstone", "peak_c": 245.0, "tal_s": 55.0, "ramp_c_per_s": 4.5},
+        ]
+
+        profiles: List[Dict[str, Any]] = []
+        for idx in range(count):
+            if idx < len(explicit):
+                spec = explicit[idx]
+            else:
+                base = mix_templates[idx % len(mix_templates)]
+                # Jitter around each template so consecutive calls produce variety.
+                jitter = float(rng.normal(0.0, 1.0))
+                spec = {
+                    "peak_c": float(base["peak_c"]) + jitter * 2.0,
+                    "tal_s": max(5.0, float(base["tal_s"]) + jitter * 3.0),
+                    "ramp_c_per_s": max(0.2, float(base["ramp_c_per_s"]) + jitter * 0.15),
+                }
+
+            curve = self._simulate_reflow_curve(
+                peak_c=float(spec["peak_c"]),
+                tal_s=float(spec["tal_s"]),
+                ramp_c_per_s=float(spec["ramp_c_per_s"]),
+                duration_s=duration_s,
+                dt_s=dt_s,
+            )
+            evidence = self._classify_reflow_curve(curve, dt_s=dt_s)
+            profiles.append({
+                "profile_id": f"rf_{idx:03d}",
+                "requested": spec,
+                "curve": curve.tolist(),
+                "dt_s": dt_s,
+                **evidence,
+            })
+
+        counts: Dict[str, int] = {}
+        for p in profiles:
+            counts[p["primary_defect"]] = counts.get(p["primary_defect"], 0) + 1
+
+        return {
+            "valid": True,
+            "profiles": profiles,
+            "label_counts": counts,
+            "thresholds": {
+                "liquidus_c": self._LIQUIDUS_C,
+                "peak_min_c": self._PEAK_MIN_C,
+                "peak_max_c": self._PEAK_MAX_C,
+                "tal_min_s": self._TAL_MIN_S,
+                "tal_max_s": self._TAL_MAX_S,
+                "ramp_max_c_per_s": self._RAMP_MAX_C_PER_S,
+            },
+            "summary": (
+                f"Generated {len(profiles)} reflow profiles with physics labels: "
+                + ", ".join(f"{k}={v}" for k, v in sorted(counts.items()))
             ),
         }
 

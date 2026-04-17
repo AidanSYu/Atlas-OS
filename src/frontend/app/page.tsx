@@ -24,6 +24,8 @@ import {
   Clock,
   HardDrive,
   Puzzle,
+  Download,
+  Upload,
 } from 'lucide-react';
 
 const WindowControls = dynamic(
@@ -44,6 +46,9 @@ export default function HomePage() {
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [navigatingToId, setNavigatingToId] = useState<string | null>(null);
   const [navigatingToName, setNavigatingToName] = useState<string>('');
+  const [exportingId, setExportingId] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+  const importInputRef = React.useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     let timeoutId: NodeJS.Timeout;
@@ -85,34 +90,48 @@ export default function HomePage() {
     });
   }, [projects, query]);
 
-  const handleOpenFolder = async () => {
-    // Try Tauri dialog for native folder picker
-    if (typeof window !== 'undefined' && (window as any).__TAURI__) {
-      try {
-        const { open } = await import('@tauri-apps/api/dialog');
-        const selected = await open({ directory: true, multiple: false, title: 'Open Research Folder' });
-        if (!selected || Array.isArray(selected)) return;
-        // Use the folder name as the project name
-        const folderName = selected.split(/[\\/]/).pop() || selected;
-        setCreatingProject(true);
-        try {
-          const created = await api.createProject(folderName.trim());
-          setProjects((previous) => [created, ...previous]);
-          setNavigatingToId(created.id);
-          setNavigatingToName(created.name);
-          router.push(`/project/${encodeURIComponent(created.id)}`);
-        } catch (e: any) {
-          setCreatingProject(false);
-          setNavigatingToId(null);
-          setError(e.message || 'Failed to open folder');
-        }
-      } catch {
-        // Fallback if dialog fails
-        setShowCreateForm(true);
-      }
-    } else {
-      // Browser fallback — show name input
-      setShowCreateForm(true);
+  // Workspaces are now managed under %LOCALAPPDATA%/Atlas/workspaces/{id}/ — no arbitrary folder pick.
+  const handleNewWorkspace = () => {
+    setShowCreateForm(true);
+  };
+
+  const handleExportWorkspace = async (e: React.MouseEvent, project: ProjectInfo) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setExportingId(project.id);
+    try {
+      const { blob, filename } = await api.exportWorkspace(project.id);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      setError(err.message || 'Failed to export workspace');
+    } finally {
+      setExportingId(null);
+    }
+  };
+
+  const handleImportClick = () => {
+    importInputRef.current?.click();
+  };
+
+  const handleImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    setImporting(true);
+    try {
+      const created = await api.importWorkspace(file);
+      setProjects((previous) => [created, ...previous]);
+    } catch (err: any) {
+      setError(err.message || 'Failed to import workspace');
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -137,7 +156,9 @@ export default function HomePage() {
   const handleDeleteProject = async (e: React.MouseEvent, project: ProjectInfo) => {
     e.preventDefault();
     e.stopPropagation();
-    const confirmed = window.confirm(`Remove "${project.name}" from recents? This cannot be undone.`);
+    const confirmed = window.confirm(
+      `Delete workspace "${project.name}"?\n\nThis removes its managed folder (documents, drafts, graph data) from AppData and cannot be undone. Export it first if you want a portable copy.`
+    );
     if (!confirmed) return;
 
     setDeletingProjectId(project.id);
@@ -243,21 +264,37 @@ export default function HomePage() {
               </div>
             )}
             <button
-              onClick={handleOpenFolder}
+              onClick={handleImportClick}
+              disabled={importing}
+              className="inline-flex h-8 items-center gap-2 rounded border border-border/50 bg-surface/60 px-3 text-[13px] font-medium text-foreground transition-all hover:border-accent/40 hover:text-accent disabled:opacity-50"
+              title="Import a .atlas workspace archive"
+            >
+              {importing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+              Import
+            </button>
+            <button
+              onClick={handleNewWorkspace}
               className="inline-flex h-8 items-center gap-2 rounded bg-accent px-3 text-[13px] font-medium text-white transition-all hover:bg-accent/90"
             >
-              <FolderOpen className="h-3.5 w-3.5" />
-              Open Folder
+              <Plus className="h-3.5 w-3.5" />
+              New Workspace
             </button>
           </div>
         </div>
+        <input
+          ref={importInputRef}
+          type="file"
+          accept=".atlas,.zip,application/zip"
+          onChange={handleImportFile}
+          className="hidden"
+        />
 
-        {/* Create Project Panel (browser fallback) */}
+        {/* New Workspace Panel — workspaces are managed under %LOCALAPPDATA%/Atlas/workspaces/{id}/ */}
         {showCreateForm && (
           <div className="mb-6 rounded border border-accent/20 bg-accent/5 p-5">
-            <h3 className="font-display text-[13px] font-medium text-foreground mb-3">Open Project Folder</h3>
+            <h3 className="font-display text-[13px] font-medium text-foreground mb-3">New Workspace</h3>
             <p className="text-xs text-muted-foreground mb-3">
-              Enter a name for your project. In the desktop app, you can pick a folder directly.
+              Atlas creates an isolated folder for this workspace under your AppData directory. Uploads, drafts, and the knowledge graph stay scoped to it — and you can export the whole thing as a <span className="font-mono">.atlas</span> archive to move between machines.
             </p>
             <div className="flex gap-2">
               <input
@@ -310,17 +347,27 @@ export default function HomePage() {
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-accent/10 border border-accent/15 mb-5">
               <FolderOpen className="h-7 w-7 text-accent/60" />
             </div>
-            <h3 className="font-display text-base font-medium text-foreground mb-1">No Projects Yet</h3>
+            <h3 className="font-display text-base font-medium text-foreground mb-1">No Workspaces Yet</h3>
             <p className="max-w-sm text-[13px] text-muted-foreground leading-relaxed mb-6">
-              Open a folder to create your first project. Your documents, knowledge graph, and sessions will live inside it.
+              Each workspace is a managed folder under your AppData directory — Atlas keeps documents, the knowledge graph, and agent sessions scoped to it. Create one from scratch or import a <span className="font-mono">.atlas</span> archive from another machine.
             </p>
-            <button
-              onClick={handleOpenFolder}
-              className="inline-flex h-9 items-center gap-2 rounded bg-accent px-4 text-[13px] font-medium text-white transition-all hover:bg-accent/90"
-            >
-              <FolderOpen className="h-3.5 w-3.5" />
-              Open Folder
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleNewWorkspace}
+                className="inline-flex h-9 items-center gap-2 rounded bg-accent px-4 text-[13px] font-medium text-white transition-all hover:bg-accent/90"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                New Workspace
+              </button>
+              <button
+                onClick={handleImportClick}
+                disabled={importing}
+                className="inline-flex h-9 items-center gap-2 rounded border border-border/50 bg-surface/60 px-4 text-[13px] font-medium text-foreground transition-all hover:border-accent/40 hover:text-accent disabled:opacity-50"
+              >
+                {importing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+                Import Archive
+              </button>
+            </div>
           </div>
         ) : filteredProjects.length === 0 ? (
           <div className="flex h-36 flex-col items-center justify-center rounded border border-border/40 bg-card/30 text-center">
@@ -349,20 +396,35 @@ export default function HomePage() {
                 className={`group relative flex h-36 cursor-pointer flex-col justify-between rounded-lg border border-border/40 bg-card/30 p-5 text-left transition-all hover:border-accent/40 hover:bg-card/50 ${navigatingToId === project.id ? 'border-accent/60 bg-card/60 ring-1 ring-accent/20' : ''
                   }`}
               >
-                {/* Delete button */}
-                <button
-                  type="button"
-                  onClick={(event) => handleDeleteProject(event, project)}
-                  disabled={deletingProjectId === project.id}
-                  className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded border border-transparent text-muted-foreground/0 transition-all group-hover:border-border/50 group-hover:bg-surface group-hover:text-muted-foreground hover:!bg-destructive/10 hover:!text-destructive hover:!border-destructive/30 disabled:opacity-50"
-                  title="Remove from recents"
-                >
-                  {deletingProjectId === project.id ? (
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                  ) : (
-                    <Trash2 className="h-3 w-3" />
-                  )}
-                </button>
+                {/* Card actions */}
+                <div className="absolute right-3 top-3 z-10 flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={(event) => handleExportWorkspace(event, project)}
+                    disabled={exportingId === project.id}
+                    className="inline-flex h-6 w-6 items-center justify-center rounded border border-transparent text-muted-foreground/0 transition-all group-hover:border-border/50 group-hover:bg-surface group-hover:text-muted-foreground hover:!text-accent hover:!border-accent/30 disabled:opacity-50"
+                    title="Export workspace as .atlas archive"
+                  >
+                    {exportingId === project.id ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Download className="h-3 w-3" />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(event) => handleDeleteProject(event, project)}
+                    disabled={deletingProjectId === project.id}
+                    className="inline-flex h-6 w-6 items-center justify-center rounded border border-transparent text-muted-foreground/0 transition-all group-hover:border-border/50 group-hover:bg-surface group-hover:text-muted-foreground hover:!bg-destructive/10 hover:!text-destructive hover:!border-destructive/30 disabled:opacity-50"
+                    title="Remove workspace"
+                  >
+                    {deletingProjectId === project.id ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Trash2 className="h-3 w-3" />
+                    )}
+                  </button>
+                </div>
 
                 <div>
                   <div className="flex items-center gap-2 mb-2">
