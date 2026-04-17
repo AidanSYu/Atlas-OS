@@ -2,7 +2,7 @@
   "schema_version": "1.0",
   "name": "physics_simulator",
   "version": "1.0.0",
-  "description": "Physics surrogate model using neural operators (FNO) or PINN with MC-dropout uncertainty quantification and Mahalanobis OOD rejection. Predicts physics in milliseconds instead of hours-long CFD simulations.",
+  "description": "Physics surrogate model using neural operators (FNO) or PINN with MC-dropout uncertainty quantification and Mahalanobis OOD rejection. Also generates parametrised SAC305 reflow thermal profiles with physics-consistent defect labels (cold_joint, overshoot_damage, insufficient_wetting, excessive_tal_voids, thermal_shock_tombstone) for downstream synthetic-vision training. Predicts physics in milliseconds instead of hours-long CFD simulations.",
   "entry_point": "wrapper.py",
   "priority": 70,
   "tags": ["physics", "surrogate", "neural-operator", "fno", "pinn", "simulation", "uq"],
@@ -20,8 +20,28 @@
     "properties": {
       "mode": {
         "type": "string",
-        "enum": ["predict", "train", "self_test"],
-        "description": "Operation mode."
+        "enum": ["predict", "train", "self_test", "reflow_defect_physics"],
+        "description": "Operation mode. 'reflow_defect_physics' generates SAC305 reflow profiles with physics-consistent defect labels for downstream synthetic-vision training."
+      },
+      "count": {
+        "type": "integer",
+        "description": "reflow_defect_physics only: number of profiles to generate (default 12)."
+      },
+      "profile_spec": {
+        "type": "array",
+        "description": "reflow_defect_physics only: explicit list of {peak_c, tal_s, ramp_c_per_s} triples. Omitted slots are drawn from a balanced defect mix."
+      },
+      "seed": {
+        "type": "integer",
+        "description": "reflow_defect_physics only: deterministic seed for jitter (default 17)."
+      },
+      "duration_s": {
+        "type": "number",
+        "description": "reflow_defect_physics only: total duration of each simulated curve in seconds (default 300)."
+      },
+      "dt_s": {
+        "type": "number",
+        "description": "reflow_defect_physics only: sample interval in seconds (default 1.0)."
       },
       "model_type": {
         "type": "string",

@@ -18,6 +18,8 @@ from app.services.prometheus_demo import (
     run_prometheus_demo_bundle,
     run_prometheus_demo_scenario,
 )
+from app.services.mwm_shadow import run_shadow_replay
+from app.services.traceability_audit import run_traceability_audit
 from app.core.config import settings
 
 router = APIRouter()
@@ -42,6 +44,64 @@ class FrameworkRunResponse(BaseModel):
 class FrameworkPluginInvokeRequest(BaseModel):
     arguments: Dict[str, Any] = Field(default_factory=dict)
     context: Dict[str, Any] = Field(default_factory=dict)
+
+
+class TraceabilityAuditRequest(BaseModel):
+    root_node_id: str
+    project_id: Optional[str] = None
+    max_depth: int = 6
+    graph_limit: int = 500
+    domain_profile: str = "manufacturing"
+    output_format: str = "prov_json"
+    graph_data: Optional[Dict[str, Any]] = None
+    narrate: bool = True
+
+
+class TraceabilityAuditResponse(BaseModel):
+    ok: bool
+    root_node_id: str
+    error: Optional[str] = None
+    substrate: Optional[Dict[str, Any]] = None
+    bundle_id: Optional[str] = None
+    content_hash: Optional[str] = None
+    traversal_path: List[str] = Field(default_factory=list)
+    evidence_nodes: List[Dict[str, Any]] = Field(default_factory=list)
+    evidence_edges: List[Dict[str, Any]] = Field(default_factory=list)
+    prov_document: Optional[Dict[str, Any]] = None
+    gaps_detected: List[Dict[str, Any]] = Field(default_factory=list)
+    narrative_report: Optional[str] = None
+    narration: Optional[str] = None
+    summary: Optional[str] = None
+
+
+class MwmShadowReplayRequest(BaseModel):
+    values: List[float]
+    threshold_high: Optional[float] = None
+    threshold_low: Optional[float] = None
+    confidence: float = 0.9
+    backend: str = "auto"
+    adapter_path: Optional[str] = None
+
+
+class MwmShadowReplayResponse(BaseModel):
+    ok: bool
+    summary: Optional[str] = None
+    narration: Optional[str] = None
+    error: Optional[str] = None
+    n_points: Optional[int] = None
+    threshold_high: Optional[float] = None
+    threshold_low: Optional[float] = None
+    confidence: Optional[float] = None
+    backend_used: Optional[str] = None
+    first_mwm_alert: Optional[int] = None
+    first_threshold_alert: Optional[int] = None
+    advance_warning_points: Optional[int] = None
+    mwm_flagged_indices: List[int] = Field(default_factory=list)
+    threshold_breach_indices: List[int] = Field(default_factory=list)
+    changepoints: List[int] = Field(default_factory=list)
+    anomaly_scores: List[float] = Field(default_factory=list)
+    forecast: Optional[Dict[str, Any]] = None
+    prediction_intervals: Optional[Dict[str, Any]] = None
 
 
 class FrameworkPluginInvokeResponse(BaseModel):
@@ -384,3 +444,53 @@ async def run_prometheus_demo_all() -> PrometheusDemoBundleResponse:
         return PrometheusDemoBundleResponse(**(await run_prometheus_demo_bundle()))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Prometheus proof pack failed: {exc}") from exc
+
+
+@router.post("/api/framework/plugins/traceability_compliance/audit",
+             response_model=TraceabilityAuditResponse)
+async def traceability_audit(request: TraceabilityAuditRequest) -> TraceabilityAuditResponse:
+    """End-to-end audit: fetch subgraph → build PROV bundle → narrate.
+
+    Produces the "type a board id, get a provenance audit in under a second"
+    experience the Luxshare technical lead will expect before committing.
+    """
+    try:
+        result = await run_traceability_audit(
+            root_node_id=request.root_node_id,
+            project_id=request.project_id,
+            max_depth=request.max_depth,
+            graph_limit=request.graph_limit,
+            domain_profile=request.domain_profile,
+            output_format=request.output_format,
+            graph_data=request.graph_data,
+            narrate=request.narrate,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Traceability audit failed: {exc}") from exc
+    return TraceabilityAuditResponse(**result)
+
+
+@router.post("/api/framework/plugins/manufacturing_world_model/shadow-replay",
+             response_model=MwmShadowReplayResponse)
+async def mwm_shadow_replay(request: MwmShadowReplayRequest) -> MwmShadowReplayResponse:
+    """Replay a time-series through the MWM and compare to a PLC threshold alarm.
+
+    Produces the "N points of advance warning" number the factory director
+    wants to see when deciding whether to promote the model out of shadow mode.
+    """
+    try:
+        result = await run_shadow_replay(
+            values=request.values,
+            threshold_high=request.threshold_high,
+            threshold_low=request.threshold_low,
+            confidence=request.confidence,
+            backend=request.backend,
+            adapter_path=request.adapter_path,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Shadow replay failed: {exc}") from exc
+    return MwmShadowReplayResponse(**result)

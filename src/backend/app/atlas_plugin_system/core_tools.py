@@ -367,6 +367,123 @@ class WalkKnowledgeGraphTool:
         return visited, filtered_edges
 
 
+class GetTraceabilitySubgraphTool:
+    """Extract a bidirectional neighborhood from a root node id for PROV auditing.
+
+    Output is shaped for direct consumption by the `traceability_compliance`
+    plugin's `graph_data` argument. A typical tool chain is:
+
+        get_traceability_subgraph(root_node_id="board-8842")
+          -> traceability_compliance(mode="report", graph_data=<result>)
+    """
+
+    def __init__(self) -> None:
+        self._service = GraphService()
+
+    async def invoke(
+        self,
+        arguments: Optional[Dict[str, Any]] = None,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        payload = dict(arguments or {})
+        runtime = dict(context or {})
+
+        root_node_id = str(payload.get("root_node_id") or "").strip()
+        if not root_node_id:
+            return {
+                "status": "error",
+                "summary": "root_node_id is required.",
+                "root_node_id": "",
+                "nodes": [],
+                "edges": [],
+            }
+
+        project_id = payload.get("project_id") or runtime.get("project_id")
+        max_depth = max(1, min(int(payload.get("max_depth") or 6), 12))
+        graph_limit = max(50, min(int(payload.get("graph_limit") or 500), 5000))
+
+        graph, id_to_idx = await self._service.get_rustworkx_subgraph(
+            project_id=project_id, limit=graph_limit,
+        )
+        if len(id_to_idx) == 0:
+            return {
+                "status": "empty_graph",
+                "summary": "The knowledge graph does not contain any active nodes yet.",
+                "root_node_id": root_node_id,
+                "nodes": [],
+                "edges": [],
+            }
+        if root_node_id not in id_to_idx:
+            return {
+                "status": "no_root",
+                "summary": f"Root node '{root_node_id}' was not found in the graph.",
+                "root_node_id": root_node_id,
+                "nodes": [],
+                "edges": [],
+            }
+
+        # Bidirectional BFS — traceability must walk upstream and downstream.
+        root_idx = id_to_idx[root_node_id]
+        depth: Dict[int, int] = {root_idx: 0}
+        order: List[int] = [root_idx]
+        visited_edges: List[Tuple[int, int, Dict[str, Any]]] = []
+        edge_keys: set = set()
+        cursor = 0
+        while cursor < len(order):
+            cur = order[cursor]
+            cursor += 1
+            if depth[cur] >= max_depth:
+                continue
+            neighbors: List[Tuple[int, int, Dict[str, Any]]] = [
+                (s, t, d) for s, t, d in graph.out_edges(cur)
+            ] + [
+                (s, t, d) for s, t, d in graph.in_edges(cur)
+            ]
+            for src_idx, tgt_idx, data in neighbors:
+                other = tgt_idx if src_idx == cur else src_idx
+                key = (min(src_idx, tgt_idx), max(src_idx, tgt_idx), id(data))
+                if key in edge_keys:
+                    continue
+                edge_keys.add(key)
+                visited_edges.append((src_idx, tgt_idx, data))
+                if other not in depth:
+                    depth[other] = depth[cur] + 1
+                    order.append(other)
+
+        # Reshape into the dict form `traceability_compliance` expects.
+        shaped_nodes: List[Dict[str, Any]] = []
+        for idx in order:
+            node_data = graph.get_node_data(idx)
+            metadata = {k: v for k, v in node_data.items() if k not in ("id", "type")}
+            shaped_nodes.append({
+                "id": node_data["id"],
+                "type": node_data.get("type", "Entity"),
+                "metadata": metadata,
+            })
+        shaped_edges: List[Dict[str, Any]] = []
+        for src_idx, tgt_idx, data in visited_edges:
+            src = graph.get_node_data(src_idx)
+            tgt = graph.get_node_data(tgt_idx)
+            metadata = {k: v for k, v in data.items() if k != "type"}
+            shaped_edges.append({
+                "source": src["id"],
+                "target": tgt["id"],
+                "relation": data.get("type", "wasDerivedFrom"),
+                "metadata": metadata,
+            })
+
+        return {
+            "status": "success",
+            "summary": (
+                f"Traced {len(shaped_nodes)} node(s) and {len(shaped_edges)} edge(s) "
+                f"from '{root_node_id}' at depth<={max_depth}."
+            ),
+            "root_node_id": root_node_id,
+            "nodes": shaped_nodes,
+            "edges": shaped_edges,
+        }
+
+
 class CoreToolRegistry:
     """Registry for Atlas' always-on knowledge substrate tools."""
 
@@ -575,6 +692,56 @@ class CoreToolRegistry:
                 },
             ),
             WalkKnowledgeGraphTool(),
+        )
+        self._register(
+            CoreToolManifest(
+                name="get_traceability_subgraph",
+                description=(
+                    "Extract a bidirectional neighborhood from the Rustworkx graph rooted at "
+                    "an exact node id, shaped as a provenance bundle input for the "
+                    "traceability_compliance plugin. Use this when a user asks to audit, "
+                    "trace, or certify a specific lot / board / batch by id."
+                ),
+                priority=165,
+                tags=["knowledge-graph", "traceability", "provenance", "core"],
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "root_node_id": {
+                            "type": "string",
+                            "description": "Exact graph node id to anchor the walk (e.g. 'board-8842').",
+                        },
+                        "project_id": {
+                            "type": "string",
+                            "description": "Optional project scope for traversal.",
+                        },
+                        "max_depth": {
+                            "type": "integer",
+                            "description": "Maximum bidirectional traversal depth. Default 6.",
+                            "minimum": 1,
+                            "maximum": 12,
+                        },
+                        "graph_limit": {
+                            "type": "integer",
+                            "description": "Maximum nodes to fetch from the substrate before walking.",
+                            "minimum": 50,
+                            "maximum": 5000,
+                        },
+                    },
+                    "required": ["root_node_id"],
+                },
+                output_schema={
+                    "type": "object",
+                    "properties": {
+                        "status": {"type": "string"},
+                        "summary": {"type": "string"},
+                        "root_node_id": {"type": "string"},
+                        "nodes": {"type": "array", "items": {"type": "object"}},
+                        "edges": {"type": "array", "items": {"type": "object"}},
+                    },
+                },
+            ),
+            GetTraceabilitySubgraphTool(),
         )
 
     def _register(self, manifest: CoreToolManifest, handler: Any) -> None:

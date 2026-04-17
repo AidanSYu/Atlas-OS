@@ -11,9 +11,8 @@ synthesis model turns the template into an ISO-style narrative.
 import hashlib
 import json
 import logging
-from collections import deque
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
@@ -88,25 +87,34 @@ def _build_prov_document(
 def _build_prov_with_library(
     nodes: List[Dict], edges: List[Dict], profile: Dict[str, str], prov_model: Any
 ) -> Dict[str, Any]:
-    """Build PROV document using the prov Python library."""
+    """Build PROV document using the W3C prov Python library.
+
+    Each PROV-DM type has its own constructor signature:
+      - entity(identifier, attributes)
+      - activity(identifier, startTime, endTime, attributes)
+      - agent(identifier, attributes)
+    Activities get `start`/`end` promoted out of metadata into positional args.
+    """
     doc = prov_model.ProvDocument()
     doc.set_default_namespace("urn:atlas:prov:")
 
     refs: Dict[str, Any] = {}
-    factories = {
-        "Entity": doc.entity,
-        "Activity": doc.activity,
-        "Agent": doc.agent,
-    }
 
     for node in nodes:
         node_id = node["id"]
         node_type = node.get("type", "Entity")
         prov_type = _resolve_prov_type(node_type, profile)
-        metadata = dict(node.get("metadata", {}))
-        metadata["prov:type"] = node_type
-        factory = factories.get(prov_type, doc.entity)
-        refs[node_id] = factory(node_id, metadata)
+        attrs = dict(node.get("metadata", {}))
+        attrs["prov:type"] = node_type
+
+        if prov_type == "Activity":
+            start = attrs.pop("start", None)
+            end = attrs.pop("end", None)
+            refs[node_id] = doc.activity(node_id, start, end, attrs)
+        elif prov_type == "Agent":
+            refs[node_id] = doc.agent(node_id, attrs)
+        else:  # Entity (default)
+            refs[node_id] = doc.entity(node_id, attrs)
 
     relation_map = {
         "used": doc.used,
@@ -179,55 +187,122 @@ def _get_prov_role(relation: str, end: str) -> str:
 
 def _bfs_walk(
     nodes: List[Dict], edges: List[Dict], root_id: str, max_depth: int
-) -> tuple:
-    """BFS walk from root_id, returning (visited_nodes, visited_edges, path)."""
-    node_map = {n["id"]: n for n in nodes}
-    adjacency: Dict[str, List[Dict]] = {}
+) -> Tuple[List[Dict], List[Dict], List[str]]:
+    """Bidirectional BFS from root_id using Rustworkx.
+
+    Traceability walks must follow edges in *both* directions: an activity is
+    upstream of the entity it generates, but downstream of the agent that
+    performed it. We model the input as a directed graph (to preserve relation
+    semantics when emitting PROV) but walk it ignoring direction.
+
+    Returns (visited_nodes, visited_edges, traversal_path).
+    """
+    import rustworkx as rx
+
+    graph = rx.PyDiGraph(multigraph=True)
+    id_to_idx: Dict[str, int] = {}
+    for node in nodes:
+        id_to_idx[node["id"]] = graph.add_node(node)
+
     for edge in edges:
-        adjacency.setdefault(edge["source"], []).append(edge)
-        adjacency.setdefault(edge["target"], []).append(edge)
+        src_id = edge.get("source")
+        tgt_id = edge.get("target")
+        if src_id in id_to_idx and tgt_id in id_to_idx:
+            graph.add_edge(id_to_idx[src_id], id_to_idx[tgt_id], edge)
 
-    visited_nodes: List[Dict] = []
+    if root_id not in id_to_idx:
+        return [], [], []
+
+    root_idx = id_to_idx[root_id]
+    visited_node_idx: List[int] = []
+    visited_edge_keys: set = set()
     visited_edges: List[Dict] = []
-    visited_ids: set = set()
-    visited_edge_ids: set = set()
-    path: List[str] = []
+    depth: Dict[int, int] = {root_idx: 0}
+    order: List[int] = [root_idx]
+    cursor = 0
 
-    queue: deque = deque([(root_id, 0)])
-    visited_ids.add(root_id)
-
-    while queue:
-        current_id, depth = queue.popleft()
-        if current_id in node_map:
-            visited_nodes.append(node_map[current_id])
-            path.append(current_id)
-
-        if depth >= max_depth:
+    while cursor < len(order):
+        current = order[cursor]
+        cursor += 1
+        visited_node_idx.append(current)
+        current_depth = depth[current]
+        if current_depth >= max_depth:
             continue
 
-        for edge in adjacency.get(current_id, []):
-            edge_id = edge.get("id", f"{edge['source']}->{edge['target']}")
-            if edge_id in visited_edge_ids:
+        # Walk both directions — upstream (in_edges) and downstream (out_edges).
+        for nbr_idx, edge_payload in (
+            [(t, d) for _, t, d in graph.out_edges(current)]
+            + [(s, d) for s, _, d in graph.in_edges(current)]
+        ):
+            edge_key = (
+                min(current, nbr_idx),
+                max(current, nbr_idx),
+                edge_payload.get("id")
+                or f"{edge_payload.get('source')}->{edge_payload.get('target')}",
+            )
+            if edge_key in visited_edge_keys:
                 continue
-            visited_edge_ids.add(edge_id)
-            visited_edges.append(edge)
+            visited_edge_keys.add(edge_key)
+            visited_edges.append(edge_payload)
 
-            neighbor = edge["target"] if edge["source"] == current_id else edge["source"]
-            if neighbor not in visited_ids:
-                visited_ids.add(neighbor)
-                queue.append((neighbor, depth + 1))
+            if nbr_idx not in depth:
+                depth[nbr_idx] = current_depth + 1
+                order.append(nbr_idx)
 
+    visited_nodes = [graph.get_node_data(idx) for idx in visited_node_idx]
+    path = [graph.get_node_data(idx)["id"] for idx in visited_node_idx]
     return visited_nodes, visited_edges, path
 
 
-def _detect_gaps(nodes: List[Dict], edges: List[Dict], profile: Dict[str, str]) -> List[Dict]:
-    """Detect compliance gaps: activities without agents, unsigned steps, etc."""
-    gaps: List[Dict] = []
-    activities = {n["id"] for n in nodes if _resolve_prov_type(n.get("type", ""), profile) == "Activity"}
-    agent_associations = {e["source"] for e in edges if e.get("relation") == "wasAssociatedWith"}
+_CAL_DATE_MAX_AGE_DAYS = 365
 
+
+def _parse_iso_date(value: Any) -> Optional[datetime]:
+    """Best-effort parse of an ISO-8601 date/time string. Returns None on failure."""
+    if not isinstance(value, str) or not value:
+        return None
+    text = value.strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        try:
+            parsed = datetime.fromisoformat(text[:10])  # try date-only slice
+        except ValueError:
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _detect_gaps(nodes: List[Dict], edges: List[Dict], profile: Dict[str, str]) -> List[Dict]:
+    """Detect compliance gaps across W3C PROV and common manufacturing-audit rules.
+
+    Rule set:
+      - missing_agent: activity with no associated agent (HIGH)
+      - missing_provenance: entity without a generating activity or derivation source (MEDIUM)
+      - unsigned_step: activity whose associated agents lack a `cert` or `signed_by` attribute (MEDIUM)
+      - expired_calibration: equipment-class agent with `cal_date` older than one year (HIGH)
+      - missing_timestamp: activity without any `start` or `end` timestamp (LOW)
+    """
+    gaps: List[Dict] = []
+    node_map = {n["id"]: n for n in nodes}
+
+    activities = {nid for nid, n in node_map.items()
+                  if _resolve_prov_type(n.get("type", ""), profile) == "Activity"}
+    agents = {nid for nid, n in node_map.items()
+              if _resolve_prov_type(n.get("type", ""), profile) == "Agent"}
+    entities = {nid for nid, n in node_map.items()
+                if _resolve_prov_type(n.get("type", ""), profile) == "Entity"}
+
+    # activity -> list of agent ids it was associated with
+    activity_agents: Dict[str, List[str]] = {}
+    for e in edges:
+        if e.get("relation") == "wasAssociatedWith":
+            activity_agents.setdefault(e["source"], []).append(e["target"])
+
+    # Rule 1: missing_agent
     for act_id in activities:
-        if act_id not in agent_associations:
+        if act_id not in activity_agents:
             gaps.append({
                 "type": "missing_agent",
                 "node_id": act_id,
@@ -235,20 +310,73 @@ def _detect_gaps(nodes: List[Dict], edges: List[Dict], profile: Dict[str, str]) 
                 "description": f"Activity '{act_id}' has no associated agent (operator/equipment).",
             })
 
+    # Rule 2: missing_provenance
     entities_with_generation = {e["source"] for e in edges if e.get("relation") == "wasGeneratedBy"}
-    entities = {n["id"] for n in nodes if _resolve_prov_type(n.get("type", ""), profile) == "Entity"}
     for ent_id in entities:
-        if ent_id not in entities_with_generation:
-            has_derivation = any(
-                e["source"] == ent_id and e.get("relation") == "wasDerivedFrom" for e in edges
-            )
-            if not has_derivation:
-                gaps.append({
-                    "type": "missing_provenance",
-                    "node_id": ent_id,
-                    "severity": "MEDIUM",
-                    "description": f"Entity '{ent_id}' has no generation activity or derivation source.",
-                })
+        if ent_id in entities_with_generation:
+            continue
+        has_derivation = any(
+            e["source"] == ent_id and e.get("relation") == "wasDerivedFrom" for e in edges
+        )
+        if not has_derivation:
+            gaps.append({
+                "type": "missing_provenance",
+                "node_id": ent_id,
+                "severity": "MEDIUM",
+                "description": f"Entity '{ent_id}' has no generation activity or derivation source.",
+            })
+
+    # Rule 3: unsigned_step — at least one associated agent must carry a credential.
+    for act_id, associated in activity_agents.items():
+        credentialed = False
+        for agent_id in associated:
+            agent_node = node_map.get(agent_id) or {}
+            meta = agent_node.get("metadata", {}) or {}
+            if meta.get("cert") or meta.get("signed_by") or meta.get("signature"):
+                credentialed = True
+                break
+        if not credentialed and associated:
+            gaps.append({
+                "type": "unsigned_step",
+                "node_id": act_id,
+                "severity": "MEDIUM",
+                "description": (
+                    f"Activity '{act_id}' has agents but none carry a certification, "
+                    f"signature, or signed_by attribute."
+                ),
+            })
+
+    # Rule 4: expired_calibration — equipment-class agents with an old cal_date.
+    now = datetime.now(timezone.utc)
+    for agent_id in agents:
+        agent_node = node_map[agent_id]
+        meta = agent_node.get("metadata", {}) or {}
+        cal_date = meta.get("cal_date") or meta.get("calibration_date")
+        parsed = _parse_iso_date(cal_date)
+        if parsed is None:
+            continue
+        age = now - parsed
+        if age > timedelta(days=_CAL_DATE_MAX_AGE_DAYS):
+            gaps.append({
+                "type": "expired_calibration",
+                "node_id": agent_id,
+                "severity": "HIGH",
+                "description": (
+                    f"Agent '{agent_id}' calibration ({cal_date}) is {age.days} days old, "
+                    f"exceeding the {_CAL_DATE_MAX_AGE_DAYS}-day limit."
+                ),
+            })
+
+    # Rule 5: missing_timestamp
+    for act_id in activities:
+        meta = node_map[act_id].get("metadata", {}) or {}
+        if not meta.get("start") and not meta.get("end"):
+            gaps.append({
+                "type": "missing_timestamp",
+                "node_id": act_id,
+                "severity": "LOW",
+                "description": f"Activity '{act_id}' has no start or end timestamp recorded.",
+            })
 
     return gaps
 

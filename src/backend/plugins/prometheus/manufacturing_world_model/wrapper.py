@@ -18,8 +18,10 @@ logger = logging.getLogger(__name__)
 
 _executor = ThreadPoolExecutor(max_workers=2)
 
-# Backend priority order for auto-selection
-_BACKEND_ORDER = ["chronos2", "timesfm25", "ttm", "moment", "stats"]
+# Backend priority order for auto-selection.
+# TimesFM 2.5 is the flagship backend — strongest zero-shot accuracy and a 16K
+# context window suit slow-drift manufacturing signatures. Others are fallbacks.
+_BACKEND_ORDER = ["timesfm25", "chronos2", "ttm", "moment", "stats"]
 
 
 # ---------------------------------------------------------------------------
@@ -81,21 +83,52 @@ def _load_chronos2() -> Any:
     )
 
 
-def _load_timesfm25(horizon: int) -> Any:
+def _load_timesfm25(horizon: int, adapter_path: Optional[str] = None) -> Any:
     import timesfm
-    tfm = timesfm.TimesFm(
-        hparams=timesfm.TimesFmHparams(
-            per_core_batch_size=32,
-            horizon_len=horizon,
-            input_patch_len=32,
-            output_patch_len=128,
-        ),
-        checkpoint=timesfm.TimesFmCheckpoint(
-            huggingface_repo_id="google/timesfm-2.0-500m-pytorch"
-        ),
+    import torch
+    from huggingface_hub import hf_hub_download
+
+    # NOTE: timesfm 2.5's `from_pretrained` leaks HuggingFace hub kwargs
+    # (`proxies`, `resume_download`, ...) into the class __init__, which
+    # rejects them. Workaround: download weights explicitly, then init the
+    # class directly and call its load_checkpoint path.
+    cls = timesfm.TimesFM_2p5_200M_torch
+    weights_path = hf_hub_download(
+        repo_id="google/timesfm-2.5-200m-pytorch",
+        filename=cls.WEIGHTS_FILENAME,
     )
-    tfm.load()
-    return tfm
+    use_compile = torch.cuda.is_available()
+    model = cls(torch_compile=use_compile)
+    model.model.load_checkpoint(weights_path, torch_compile=use_compile)
+
+    if adapter_path:
+        # Optional: load a LoRA adapter produced by finetune.py on top of the
+        # frozen base weights. Absent adapter → zero-shot inference.
+        try:
+            from peft import PeftModel  # type: ignore
+        except ImportError as exc:
+            raise RuntimeError(
+                "adapter_path supplied but 'peft' is not installed (pip install peft)."
+            ) from exc
+        inner = getattr(model, "model", model)
+        wrapped = PeftModel.from_pretrained(inner, adapter_path)
+        if hasattr(model, "model"):
+            model.model = wrapped
+        else:
+            model = wrapped
+        logger.info("Loaded LoRA adapter from %s", adapter_path)
+    model.compile(
+        timesfm.ForecastConfig(
+            max_context=1024,
+            max_horizon=max(256, horizon),
+            normalize_inputs=True,
+            use_continuous_quantile_head=True,
+            force_flip_invariance=True,
+            infer_is_positive=True,
+            fix_quantile_crossing=True,
+        )
+    )
+    return model
 
 
 def _load_ttm() -> Any:
@@ -144,15 +177,17 @@ def _predict_chronos2(
 def _predict_timesfm25(
     model: Any, values: np.ndarray, horizon: int, confidence: float
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    point, quantile = model.forecast([values], freq=[0])
-    median = np.array(point[0][:horizon])
-    if quantile is not None and len(quantile) > 0:
-        q = np.array(quantile[0])
-        low = q[0, :horizon] if q.ndim >= 2 else median * 0.95
-        high = q[-1, :horizon] if q.ndim >= 2 else median * 1.05
-    else:
-        low = median * 0.95
-        high = median * 1.05
+    point, quantile = model.forecast(horizon=horizon, inputs=[values])
+    # point: (batch=1, horizon); quantile: (batch=1, horizon, 10) — [mean, q10..q90]
+    median = np.asarray(point)[0, :horizon]
+    q = np.asarray(quantile)[0]  # (horizon, 10)
+    # Map confidence to the nearest decile available in the quantile head.
+    # Indices: 0=mean, 1=q10, 2=q20, ..., 9=q90.
+    alpha = (1.0 - confidence) / 2.0
+    lo_idx = max(1, min(9, int(round(alpha * 10))))
+    hi_idx = max(1, min(9, int(round((1.0 - alpha) * 10))))
+    low = q[:horizon, lo_idx]
+    high = q[:horizon, hi_idx]
     return median, low, high
 
 
@@ -392,10 +427,14 @@ class ManufacturingWorldModelWrapper:
         self._backends: Dict[str, Any] = {}
 
     def _get_or_load_backend(
-        self, name: str, horizon: int = 64, task: str = "forecasting"
+        self,
+        name: str,
+        horizon: int = 64,
+        task: str = "forecasting",
+        adapter_path: Optional[str] = None,
     ) -> Any:
-        """Load and cache a backend model."""
-        cache_key = f"{name}_{task}"
+        """Load and cache a backend model. Adapter is part of the cache key."""
+        cache_key = f"{name}_{task}_{adapter_path or ''}"
         if cache_key in self._backends:
             return self._backends[cache_key]
 
@@ -406,11 +445,11 @@ class ManufacturingWorldModelWrapper:
                 f"Install it and retry."
             )
 
-        logger.info("Loading backend: %s (task=%s)", name, task)
+        logger.info("Loading backend: %s (task=%s, adapter=%s)", name, task, adapter_path or "none")
         if name == "chronos2":
             model = _load_chronos2()
         elif name == "timesfm25":
-            model = _load_timesfm25(horizon)
+            model = _load_timesfm25(horizon, adapter_path=adapter_path)
         elif name == "ttm":
             model = _load_ttm()
         elif name == "moment":
@@ -425,10 +464,10 @@ class ManufacturingWorldModelWrapper:
 
     def _predict_with_backend(
         self, name: str, values: np.ndarray, horizon: int, confidence: float,
-        task: str = "forecasting",
+        task: str = "forecasting", adapter_path: Optional[str] = None,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Run prediction through the named backend."""
-        model = self._get_or_load_backend(name, horizon, task)
+        model = self._get_or_load_backend(name, horizon, task, adapter_path=adapter_path)
 
         dispatch = {
             "chronos2": _predict_chronos2,
@@ -459,6 +498,7 @@ class ManufacturingWorldModelWrapper:
         horizon = int(args.get("horizon", 64))
         backend_name = args.get("backend", "auto")
         confidence = float(args.get("confidence_level", 0.9))
+        adapter_path = args.get("adapter_path") or None
 
         if mode in ("changepoint", "full") and not _has_ruptures():
             return {
@@ -493,7 +533,9 @@ class ManufacturingWorldModelWrapper:
             try:
                 median, low, high = await loop.run_in_executor(
                     _executor,
-                    lambda: self._predict_with_backend(backend_name, values, horizon, confidence),
+                    lambda: self._predict_with_backend(
+                        backend_name, values, horizon, confidence, adapter_path=adapter_path,
+                    ),
                 )
                 result["forecast"] = {
                     "median": median.tolist(),
@@ -504,7 +546,9 @@ class ManufacturingWorldModelWrapper:
 
                 # Conformal calibration
                 def _conformal_predict_fn(v: np.ndarray, h: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-                    return self._predict_with_backend(backend_name, v, h, confidence)
+                    return self._predict_with_backend(
+                        backend_name, v, h, confidence, adapter_path=adapter_path,
+                    )
 
                 try:
                     conf_result = await loop.run_in_executor(

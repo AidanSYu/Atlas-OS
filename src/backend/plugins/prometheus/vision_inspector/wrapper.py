@@ -1,4 +1,10 @@
-"""Offline AOI triage with PatchCore and optional local VLM adjudication."""
+"""Offline AOI triage with PatchCore and optional local VLM adjudication.
+
+The VLM stage is post-trained via `dpo_finetune.py` to emit a strict one-line
+format (`DEFECT: <label> | CONFIDENCE: <0-1> | LOCATION: <comp>_PIN<n>`). Pass
+`adapter_path` to this plugin to load a LoRA adapter on top of the frozen base
+VLM; without it, the base model runs zero-shot and you get whatever verbose
+output it was trained to emit."""
 
 from __future__ import annotations
 
@@ -6,9 +12,10 @@ import asyncio
 import gc
 import logging
 import os
+import re
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
@@ -16,6 +23,14 @@ logger = logging.getLogger(__name__)
 
 _VLM_MODEL = None
 _VLM_PROCESSOR = None
+_VLM_LOADED_KEY: Optional[Tuple[str, str]] = None
+_DEFAULT_VLM_MODEL_ID = "Qwen/Qwen2-VL-2B-Instruct"
+
+_STRICT_RE = re.compile(
+    r"DEFECT:\s*(?P<defect>[A-Za-z_][A-Za-z0-9_]*)\s*\|\s*"
+    r"CONFIDENCE:\s*(?P<confidence>[01]?\.\d+|1(?:\.0+)?|0)\s*\|\s*"
+    r"LOCATION:\s*(?P<location>[A-Za-z0-9_]+)",
+)
 
 
 def _has_anomalib() -> bool:
@@ -147,48 +162,77 @@ def _extract_anomaly_crop(image_path: str, heatmap, padding: int = 30) -> Dict[s
     return {"crop": img.crop((x_min, y_min, x_max, y_max)), "bbox": [x_min, y_min, x_max, y_max]}
 
 
-_DEFAULT_PROMPT = (
-    "You are inspecting a cropped region from a PCB image flagged by anomaly detection. "
-    "Respond with three lines only:\n"
-    "CLASSIFICATION: one of [defect, false_positive, uncertain]\n"
-    "CONFIDENCE: float between 0 and 1\n"
-    "EXPLANATION: short rationale"
+_STRICT_PROMPT = (
+    "You are a factory AOI inspector. Report the defect for the highlighted "
+    "component. Output exactly one line in this format and nothing else:\n"
+    "DEFECT: <label> | CONFIDENCE: <0-1> | LOCATION: <component>_PIN<n>\n"
+    "Valid labels: pass, cold_joint, overshoot_damage, insufficient_wetting, "
+    "excessive_tal_voids, thermal_shock_tombstone, solder_bridge."
 )
 
 
-def _load_vlm(vlm_model: str) -> None:
-    global _VLM_MODEL, _VLM_PROCESSOR
-    if _VLM_MODEL is not None:
-        return
+def _load_vlm(vlm_model: str, adapter_path: Optional[str] = None) -> None:
+    """Load (or reuse) the VLM + optional PEFT adapter.
 
-    from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+    Cached on (model_id, adapter_path) — swapping adapters forces a reload.
+    """
+    global _VLM_MODEL, _VLM_PROCESSOR, _VLM_LOADED_KEY
+
+    cache_key = (vlm_model, adapter_path or "")
+    if _VLM_MODEL is not None and _VLM_LOADED_KEY == cache_key:
+        return
+    if _VLM_MODEL is not None and _VLM_LOADED_KEY != cache_key:
+        _unload_vlm()
+
+    # Qwen2-VL-2B is our default (strict-format post-trained target). Qwen2.5-VL
+    # works for backwards compatibility — choose the matching model class by
+    # inspecting the repo id.
+    if "Qwen2.5-VL" in vlm_model:
+        from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration as _Cls
+    else:
+        from transformers import AutoProcessor, Qwen2VLForConditionalGeneration as _Cls
 
     try:
         from transformers import BitsAndBytesConfig
 
         quant_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype="float16")
-        _VLM_MODEL = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+        model = _Cls.from_pretrained(
             vlm_model,
             quantization_config=quant_config,
             device_map="auto",
             local_files_only=True,
         )
     except Exception:
-        _VLM_MODEL = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+        model = _Cls.from_pretrained(
             vlm_model,
             device_map="auto",
             local_files_only=True,
         )
+
+    if adapter_path:
+        try:
+            from peft import PeftModel  # type: ignore
+        except ImportError as exc:
+            raise RuntimeError(
+                "adapter_path was supplied but 'peft' is not installed. "
+                "Install it with: pip install peft."
+            ) from exc
+        model = PeftModel.from_pretrained(model, adapter_path)
+        logger.info("Loaded VLM adapter from %s on top of %s", adapter_path, vlm_model)
+
+    _VLM_MODEL = model
     _VLM_PROCESSOR = AutoProcessor.from_pretrained(vlm_model, local_files_only=True)
+    _VLM_LOADED_KEY = cache_key
 
 
 def _unload_vlm() -> None:
-    global _VLM_MODEL, _VLM_PROCESSOR
+    global _VLM_MODEL, _VLM_PROCESSOR, _VLM_LOADED_KEY
     if _VLM_MODEL is not None:
         del _VLM_MODEL
         del _VLM_PROCESSOR
         _VLM_MODEL = None
         _VLM_PROCESSOR = None
+        _VLM_LOADED_KEY = None
         try:
             import torch
 
@@ -199,38 +243,73 @@ def _unload_vlm() -> None:
         gc.collect()
 
 
-def _run_vlm_classification(crop_image, vlm_model: str, prompt: str) -> Dict[str, Any]:
+def _parse_strict_output(raw: str) -> Dict[str, Any]:
+    """Extract the strict one-line schema from VLM output.
+
+    If the model emits the structured line anywhere in its response we accept
+    it; if not, we flag the response as `format_violation` and keep the raw
+    text so the caller can see what went wrong.
+    """
+    match = _STRICT_RE.search(raw)
+    if match is None:
+        return {
+            "defect": None,
+            "confidence": None,
+            "location": None,
+            "format_ok": False,
+            "raw": raw,
+        }
+    try:
+        confidence = float(match.group("confidence"))
+    except ValueError:
+        confidence = None
+    return {
+        "defect": match.group("defect"),
+        "confidence": min(max(confidence, 0.0), 1.0) if confidence is not None else None,
+        "location": match.group("location"),
+        "format_ok": True,
+        "raw": raw,
+    }
+
+
+def _map_defect_to_verdict(defect: Optional[str]) -> str:
+    if defect is None:
+        return "UNCERTAIN"
+    if defect == "pass":
+        return "PASS"
+    return "FAIL"
+
+
+def _run_vlm_classification(
+    crop_image,
+    vlm_model: str,
+    prompt: str,
+    adapter_path: Optional[str] = None,
+) -> Dict[str, Any]:
     import torch
 
-    _load_vlm(vlm_model)
+    _load_vlm(vlm_model, adapter_path=adapter_path)
     messages = [{"role": "user", "content": [{"type": "image", "image": crop_image}, {"type": "text", "text": prompt}]}]
     text = _VLM_PROCESSOR.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     inputs = _VLM_PROCESSOR(text=[text], images=[crop_image], return_tensors="pt", padding=True)
     inputs = inputs.to(_VLM_MODEL.device)
     with torch.no_grad():
-        generated = _VLM_MODEL.generate(**inputs, max_new_tokens=128)
+        # Strict-format output should fit well under 64 tokens; the lower cap
+        # is also part of the latency story — shorter decode = faster cycle.
+        generated = _VLM_MODEL.generate(**inputs, max_new_tokens=64, do_sample=False)
     input_len = inputs["input_ids"].shape[1]
     output_text = _VLM_PROCESSOR.batch_decode(generated[:, input_len:], skip_special_tokens=True)[0].strip()
 
-    classification = "uncertain"
-    confidence = 0.5
-    explanation = output_text
-    for line in output_text.splitlines():
-        line = line.strip()
-        if line.upper().startswith("CLASSIFICATION:"):
-            classification = line.split(":", 1)[1].strip().lower()
-        elif line.upper().startswith("CONFIDENCE:"):
-            try:
-                confidence = float(line.split(":", 1)[1].strip())
-            except ValueError:
-                confidence = 0.5
-        elif line.upper().startswith("EXPLANATION:"):
-            explanation = line.split(":", 1)[1].strip()
+    parsed = _parse_strict_output(output_text)
     return {
-        "vlm_classification": classification,
-        "vlm_confidence": min(max(confidence, 0.0), 1.0),
-        "vlm_explanation": explanation,
+        "vlm_defect": parsed["defect"],
+        "vlm_classification": parsed["defect"] if parsed["format_ok"] else "uncertain",
+        "vlm_location": parsed["location"],
+        "vlm_confidence": parsed["confidence"] if parsed["confidence"] is not None else 0.5,
+        "vlm_format_ok": parsed["format_ok"],
+        "vlm_explanation": parsed["raw"],
         "vlm_raw_output": output_text,
+        "vlm_token_count": int(generated.shape[1] - input_len),
     }
 
 
@@ -343,8 +422,9 @@ class VisionInspectorWrapper:
             }
 
         skip_vlm = bool(args.get("skip_vlm", False))
-        vlm_model = args.get("vlm_model", "Qwen/Qwen2.5-VL-3B-Instruct")
-        prompt = args.get("prompt", _DEFAULT_PROMPT)
+        vlm_model = args.get("vlm_model", _DEFAULT_VLM_MODEL_ID)
+        prompt = args.get("prompt", _STRICT_PROMPT)
+        adapter_path = args.get("adapter_path") or None
         if skip_vlm:
             verdict = "FAIL" if anomaly_score > 0.7 else "UNCERTAIN"
             return {
@@ -381,16 +461,17 @@ class VisionInspectorWrapper:
             }
 
         try:
-            vlm_result = await loop.run_in_executor(None, _run_vlm_classification, crop_result["crop"], vlm_model, prompt)
+            vlm_result = await loop.run_in_executor(
+                None, _run_vlm_classification, crop_result["crop"], vlm_model, prompt, adapter_path,
+            )
             vlm_conf = float(vlm_result.get("vlm_confidence", 0.5))
             cascade_conf = 0.6 * anomaly_score + 0.4 * vlm_conf
-            classification = vlm_result.get("vlm_classification", "uncertain")
-            if classification == "false_positive":
-                verdict = "PASS"
-            elif cascade_conf > 0.7:
-                verdict = "FAIL"
+            defect_label = vlm_result.get("vlm_defect")
+            format_ok = bool(vlm_result.get("vlm_format_ok", False))
+            if not format_ok:
+                verdict = "FAIL" if cascade_conf > 0.7 else "UNCERTAIN"
             else:
-                verdict = "UNCERTAIN"
+                verdict = _map_defect_to_verdict(defect_label)
             return {
                 "valid": True,
                 "engine_used": result["engine_used"],
@@ -398,11 +479,20 @@ class VisionInspectorWrapper:
                 "anomaly_score": anomaly_score,
                 "anomaly_heatmap_path": heatmap_path,
                 "bbox": bbox,
+                "vlm_defect": defect_label,
+                "vlm_location": vlm_result.get("vlm_location"),
+                "vlm_format_ok": format_ok,
+                "vlm_token_count": vlm_result.get("vlm_token_count"),
                 "vlm_explanation": vlm_result.get("vlm_explanation"),
-                "vlm_classification": classification,
+                "vlm_classification": vlm_result.get("vlm_classification"),
                 "cascade_confidence": cascade_conf,
+                "adapter_path": adapter_path,
                 "stage_reached": "detector+vlm",
-                "summary": f"{verdict} — detector score {anomaly_score:.3f}, VLM classified '{classification}'.",
+                "summary": (
+                    f"{verdict} — detector {anomaly_score:.3f}, "
+                    f"VLM {'strict' if format_ok else 'unstructured'} output: "
+                    f"{defect_label or 'n/a'} @ {vlm_result.get('vlm_location') or 'n/a'}"
+                ),
             }
         except Exception as exc:
             return {

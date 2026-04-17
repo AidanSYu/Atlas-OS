@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Literal
 
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Query, UploadFile
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from app.core.config import settings
@@ -26,6 +27,7 @@ from app.services.stage_context import (
     set_stage_context_preamble,
 )
 from app.services.workspace import WorkspaceService
+from app.services.workspace_manager import get_workspace_manager
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -299,6 +301,13 @@ async def create_project(body: ProjectCreate) -> ProjectResponse:
         )
         session.add(project)
         session.commit()
+
+        # Provision the managed workspace folder under %LOCALAPPDATA%/Atlas/workspaces/{id}/
+        try:
+            get_workspace_manager().create_folder(project.id, project.name, project.description)
+        except Exception as folder_exc:
+            logger.warning("Workspace folder creation failed for %s: %s", project.id, folder_exc)
+
         return ProjectResponse(
             id=project.id,
             name=project.name,
@@ -341,6 +350,12 @@ async def delete_project(project_id: str) -> Dict[str, str]:
             raise HTTPException(status_code=404, detail="Project not found")
         session.delete(project)
         session.commit()
+
+        try:
+            get_workspace_manager().delete_folder(project_id)
+        except Exception as folder_exc:
+            logger.warning("Workspace folder delete failed for %s: %s", project_id, folder_exc)
+
         return {"status": "success", "message": f"Deleted project {project_id}"}
     except HTTPException:
         raise
@@ -364,7 +379,24 @@ async def ingest_document(
         supported = ", ".join(SUPPORTED_FILE_EXTENSIONS)
         raise HTTPException(status_code=400, detail=f"Unsupported file type. Supported formats: {supported}")
 
-    upload_path = Path(settings.UPLOAD_DIR) / file.filename
+    # Scope uploads to the managed workspace folder; fall back to shared UPLOAD_DIR when no project is given
+    if project_id:
+        manager = get_workspace_manager()
+        # Self-heal for projects that predate the managed-workspace folder layout
+        if not manager.workspace_path(project_id).exists():
+            session = get_session()
+            try:
+                project = session.query(Project).filter(Project.id == project_id).first()
+            finally:
+                session.close()
+            if project:
+                manager.create_folder(project.id, project.name, project.description)
+        upload_dir = manager.files_path(project_id)
+    else:
+        upload_dir = Path(settings.UPLOAD_DIR)
+        upload_dir.mkdir(parents=True, exist_ok=True)
+
+    upload_path = upload_dir / file.filename
     ingestion_service = get_ingestion_service()
 
     try:
@@ -562,6 +594,96 @@ async def delete_workspace_draft(project_id: str, draft_id: str) -> Dict[str, An
     if not deleted:
         raise HTTPException(status_code=404, detail="Draft not found")
     return {"status": "deleted", "id": draft_id}
+
+
+# ------------------------------------------------------------------
+# Workspace archive (export / import) — portable .atlas bundles
+# ------------------------------------------------------------------
+
+
+def _safe_filename(name: str) -> str:
+    keep = [c if c.isalnum() or c in ("-", "_") else "-" for c in name.strip()]
+    slug = "".join(keep).strip("-") or "workspace"
+    return slug[:64]
+
+
+@router.get("/api/workspaces/{project_id}/folder")
+async def get_workspace_folder(project_id: str) -> Dict[str, Any]:
+    """Return the managed folder path and manifest for a workspace."""
+    session = get_session()
+    try:
+        project = session.query(Project).filter(Project.id == project_id).first()
+        if not project:
+            raise HTTPException(status_code=404, detail="Workspace not found")
+    finally:
+        session.close()
+
+    manager = get_workspace_manager()
+    if not manager.workspace_path(project_id).exists():
+        manager.create_folder(project_id, project.name, project.description)
+
+    return {
+        "workspace_id": project_id,
+        "path": str(manager.workspace_path(project_id)),
+        "files_path": str(manager.files_path(project_id)),
+        "drafts_path": str(manager.drafts_path(project_id)),
+        "manifest": manager.read_manifest(project_id),
+    }
+
+
+@router.get("/api/workspaces/{project_id}/export")
+async def export_workspace(project_id: str) -> Response:
+    """Stream a `.atlas` archive of the workspace (files + SQLite rows + Qdrant points)."""
+    session = get_session()
+    try:
+        project = session.query(Project).filter(Project.id == project_id).first()
+        if not project:
+            raise HTTPException(status_code=404, detail="Workspace not found")
+        project_name = project.name
+    finally:
+        session.close()
+
+    try:
+        archive = get_workspace_manager().export_archive(project_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("Workspace export failed for %s: %s", project_id, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Export failed: {exc}") from exc
+
+    filename = f"{_safe_filename(project_name)}.atlas"
+    return Response(
+        content=archive,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/api/workspaces/import")
+async def import_workspace(file: UploadFile = File(...)) -> ProjectResponse:
+    """Import a `.atlas` archive as a new managed workspace."""
+    try:
+        archive_bytes = await file.read()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not read upload: {exc}") from exc
+
+    if not archive_bytes:
+        raise HTTPException(status_code=400, detail="Archive is empty")
+
+    try:
+        project = get_workspace_manager().import_archive(archive_bytes)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("Workspace import failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Import failed: {exc}") from exc
+
+    return ProjectResponse(
+        id=project.id,
+        name=project.name,
+        description=project.description,
+        created_at=project.created_at.isoformat() if project.created_at else "",
+    )
 
 
 @router.post("/api/route", response_model=RouteIntentResponse)

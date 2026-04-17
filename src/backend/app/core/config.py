@@ -4,12 +4,34 @@ from pydantic import Field
 from pathlib import Path
 import json
 import logging
+import os
+import sys
 
 logger = logging.getLogger(__name__)
 
 
 def _get_backend_dir() -> Path:
     return Path(__file__).resolve().parent.parent.parent
+
+
+def _get_app_data_root() -> Path:
+    """Return the per-user app data root where managed workspaces live.
+
+    Matches the bundled convention established in run_server.py:
+      Windows: %LOCALAPPDATA%/Atlas
+      macOS:   ~/Library/Application Support/Atlas
+      Linux:   ~/.atlas
+    """
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        return Path(base) / "Atlas"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "Atlas"
+    return Path.home() / ".atlas"
+
+
+def _get_workspaces_dir() -> str:
+    return str(_get_app_data_root() / "workspaces")
 
 
 def get_env_path() -> Path:
@@ -197,6 +219,9 @@ class Settings(BaseSettings):
     ENABLE_DISCOVERY_MODE: bool = True     # Enable the Discovery OS pipeline
     DISCOVERY_DEFAULT_PHASE: str = "hit_identification"  # Default workflow phase
 
+    # Managed Workspace Storage (AppData-rooted, isolated per workspace)
+    ATLAS_WORKSPACES_DIR: str = Field(default_factory=_get_workspaces_dir)
+
     # Atlas Framework Configuration
     ATLAS_PLUGIN_DIR: str = Field(default_factory=_get_plugins_dir)
     ATLAS_ORCHESTRATOR_MODEL: str = "nvidia_Orchestrator-8B-IQ2_M.gguf"
@@ -231,6 +256,9 @@ settings.DATA_DIR = _resolve_config_path(settings.DATA_DIR)
 settings.UPLOAD_DIR = _resolve_config_path(settings.UPLOAD_DIR)
 settings.DRAFTS_DIR = _resolve_config_path(settings.DRAFTS_DIR)
 settings.ATLAS_PLUGIN_DIR = _resolve_config_path(settings.ATLAS_PLUGIN_DIR)
+# ATLAS_WORKSPACES_DIR is absolute by default (AppData/~/Library); keep user overrides as-is if absolute.
+if not Path(settings.ATLAS_WORKSPACES_DIR).is_absolute():
+    settings.ATLAS_WORKSPACES_DIR = _resolve_config_path(settings.ATLAS_WORKSPACES_DIR)
 
 # Prefer the repository-root models directory when an older relative env path
 # resolves to a non-existent location such as src/models.
@@ -245,3 +273,4 @@ Path(settings.MODELS_DIR).mkdir(parents=True, exist_ok=True)
 Path(settings.QDRANT_STORAGE_PATH).mkdir(parents=True, exist_ok=True)
 Path(settings.DRAFTS_DIR).mkdir(parents=True, exist_ok=True)
 Path(settings.ATLAS_PLUGIN_DIR).mkdir(parents=True, exist_ok=True)
+Path(settings.ATLAS_WORKSPACES_DIR).mkdir(parents=True, exist_ok=True)

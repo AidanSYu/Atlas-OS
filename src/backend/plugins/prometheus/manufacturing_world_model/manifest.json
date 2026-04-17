@@ -2,7 +2,7 @@
   "schema_version": "1.0",
   "name": "manufacturing_world_model",
   "version": "1.0.0",
-  "description": "Time-series forecasting, anomaly detection, and change-point analysis for manufacturing sensor data. Uses whichever local forecasting backend is installed (Chronos-2, TimesFM-2.5, Granite-TTM, MOMENT, or StatsForecast) and requires ruptures for changepoint analysis.",
+  "description": "Time-series forecasting, anomaly detection, and change-point analysis for manufacturing sensor data. Flagship backend is Google TimesFM-2.5 (200M, 16K context, native quantile head); falls back to Chronos-2, Granite-TTM, MOMENT, or StatsForecast if unavailable. Requires 'ruptures' for changepoint analysis.",
   "entry_point": "wrapper.py",
   "priority": 72,
   "tags": ["timeseries", "forecasting", "anomaly", "manufacturing", "predictive-maintenance"],
@@ -45,6 +45,10 @@
       "confidence_level": {
         "type": "number",
         "description": "Confidence level for prediction intervals (default 0.9)."
+      },
+      "adapter_path": {
+        "type": "string",
+        "description": "Optional filesystem path to a LoRA adapter produced by finetune.py. When set, the adapter is loaded on top of frozen base weights (TimesFM 2.5 only). Omit for zero-shot inference."
       }
     }
   },
