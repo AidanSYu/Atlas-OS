@@ -143,7 +143,11 @@ class AtlasOrchestratorService:
 
         try:
             from app.services.llm import _add_cuda_dll_directories
+            from app.services import model_slot
             _add_cuda_dll_directories()
+
+            # Claim the single GPU slot — evicts the ingestion LLM if resident.
+            model_slot.acquire("orchestrator", self.unload)
 
             logger.info("Loading Atlas orchestrator from %s (gpu_layers=%s)", model_path, self._gpu_layers)
             self._llama = Llama(
@@ -165,6 +169,30 @@ class AtlasOrchestratorService:
                 f"enough VRAM (or lower ATLAS_ORCHESTRATOR_GPU_LAYERS). "
                 f"No API fallback — see doctrine."
             ) from exc
+
+    def unload(self) -> None:
+        """Drop the Nemotron GGUF so the GPU slot is free.
+
+        Called by the model slot coordinator when the ingestion LLM needs the
+        GPU. Safe to call when no model is loaded.
+        """
+        if self._llama is None:
+            return
+        logger.info("Unloading orchestrator model: %s", self._model_name)
+        try:
+            del self._llama
+        except Exception:
+            pass
+        self._llama = None
+        self._model_name = None
+        import gc
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass
 
     # ------------------------------------------------------------------
     # Main orchestration entry point
@@ -228,6 +256,12 @@ class AtlasOrchestratorService:
             # ---- Execute each tool call --------------------------
             tool_results: List[str] = []
             for tool_name, tool_args in tool_calls:
+                if self.catalog.is_exclusive_gpu(tool_name):
+                    logger.info(
+                        "Tool '%s' requests exclusive GPU — unloading orchestrator",
+                        tool_name,
+                    )
+                    self.unload()
                 try:
                     result = await self.catalog.invoke(
                         tool_name,
@@ -302,7 +336,12 @@ class AtlasOrchestratorService:
     # Generation — local Nemotron only (no API fallback; see doctrine)
     # ------------------------------------------------------------------
     async def _generate(self, messages: List[Dict[str, str]]) -> str:
-        """Generate a completion from the local Nemotron GGUF."""
+        """Generate a completion from the local Nemotron GGUF.
+
+        Idempotent ``ensure_model_loaded`` call so the model reloads if a
+        prior exclusive-GPU tool evicted it.
+        """
+        await self.ensure_model_loaded()
         prompt_text = self._render_chatml(messages)
         loop = asyncio.get_running_loop()
 

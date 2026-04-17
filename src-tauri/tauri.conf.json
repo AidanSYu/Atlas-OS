@@ -4,7 +4,7 @@
     "beforeBuildCommand": "cmd /c npm.cmd --prefix src/frontend run build",
     "beforeDevCommand": "cmd /c npm.cmd --prefix src/frontend run dev",
     "devPath": "http://localhost:3001",
-    "distDir": "src/frontend/out"
+    "distDir": "../frontend/out"
   },
   "package": {
     "productName": "Atlas",

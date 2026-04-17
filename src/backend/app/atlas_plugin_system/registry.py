@@ -25,6 +25,10 @@ class ResourceRequirements(BaseModel):
     min_ram_mb: int = 0
     gpu_required: bool = False
     recommended_vram_mb: int = 0
+    # When true, the orchestrator evicts itself from GPU before dispatching
+    # this tool so the plugin has exclusive VRAM. Reserve for heavy workloads
+    # (training, large VLM inference) — reloading Nemotron costs ~10-15s.
+    exclusive_gpu: bool = False
 
 
 class PluginManifest(BaseModel):
@@ -299,6 +303,13 @@ class PluginRegistry:
     def tool_names(self) -> List[str]:
         """Return tool names ordered by prompt priority."""
         return [record.manifest.name for record in self._ordered_plugins()]
+
+    def is_exclusive_gpu(self, plugin_name: str) -> bool:
+        """Return True if the plugin's manifest requests exclusive GPU access."""
+        record = self._plugins.get(plugin_name)
+        if record is None:
+            return False
+        return bool(record.manifest.resource_requirements.exclusive_gpu)
 
     def build_toolkit_prompt(self) -> str:
         """Compile manifest schemas into an orchestrator-facing toolkit block."""

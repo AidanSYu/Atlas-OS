@@ -12,7 +12,8 @@
     "min_vram_mb": 2000,
     "min_ram_mb": 4096,
     "gpu_required": false,
-    "recommended_vram_mb": 4000
+    "recommended_vram_mb": 4000,
+    "exclusive_gpu": true
   },
   "self_test": "python -c \"from plugins.prometheus.vision_inspector.wrapper import PLUGIN; import asyncio; r=asyncio.run(PLUGIN.invoke({'mode':'self_test'})); assert r.get('valid', True)\"",
   "input_schema": {

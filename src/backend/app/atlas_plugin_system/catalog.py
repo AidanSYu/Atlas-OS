@@ -93,6 +93,16 @@ class ToolCatalog:
             return await self.core_tools.invoke(tool_name, arguments, context)
         return await self.plugins.invoke(tool_name, arguments, context)
 
+    def is_exclusive_gpu(self, tool_name: str) -> bool:
+        """Return True if dispatching this tool should evict the orchestrator.
+
+        Core tools never hold exclusive GPU. Plugins opt in via
+        ``resource_requirements.exclusive_gpu`` in their manifest.
+        """
+        if self.core_tools.has_tool(tool_name):
+            return False
+        return self.plugins.is_exclusive_gpu(tool_name)
+
 
 _tool_catalog: Optional[ToolCatalog] = None
 
