@@ -34,10 +34,15 @@ _STRICT_RE = re.compile(
 
 
 def _has_anomalib() -> bool:
+    import sys
     try:
         import anomalib  # noqa: F401
         return True
-    except ImportError:
+    except ImportError as exc:
+        logger.error(
+            "[vision_inspector] anomalib import failed. python=%s, sys.path[0:3]=%s, error=%s",
+            sys.executable, sys.path[:3], exc,
+        )
         return False
 
 
@@ -100,12 +105,10 @@ def _train_patchcore(reference_dir: str, model_save_dir: str) -> str:
         name="reference",
         root=reference_dir,
         normal_dir=reference_dir,
-        task="classification",
-        image_size=(256, 256),
         train_batch_size=8,
         eval_batch_size=8,
     )
-    model = Patchcore(backbone="wide_resnet50_2", layers_to_extract=["layer2", "layer3"], coreset_sampling_ratio=0.1)
+    model = Patchcore(backbone="wide_resnet50_2", layers=["layer2", "layer3"], coreset_sampling_ratio=0.1)
     engine = Engine(max_epochs=1, default_root_dir=model_save_dir)
     engine.fit(model=model, datamodule=datamodule)
     return model_save_dir

@@ -467,17 +467,24 @@ class LLMService:
             else:
                 logger.warning(f"Requested model '{model_name}' not found in {self.models_dir}")
 
-        # Auto-detect if no specific model or requested model not found
+        # Auto-detect if no specific model or requested model not found.
+        # Ingestion jobs (relationship extraction, RAPTOR summaries, metadata)
+        # share this service, so prefer a small model that leaves VRAM for the
+        # orchestrator. The orchestrator loads its Nemotron GGUF separately.
         if model_path is None:
             model_patterns = [
-                "Phi-3.5-mini-instruct*.gguf",  # Priority 1: SOTA Small Model
-                "Qwen2.5-3B-Instruct*.gguf",    # Priority 2: Fast Small Model
-                "llama-3-8b-instruct*.gguf",    # Priority 3: Legacy Standard
+                "qwen2.5-1.5b-instruct*.gguf",  # Priority 1: Small, fast, frees VRAM for orchestrator
+                "Qwen2.5-3B-Instruct*.gguf",
+                "Phi-3.5-mini-instruct*.gguf",
+                "llama-3-8b-instruct*.gguf",
                 "Meta-Llama-3-8B-Instruct*.gguf",
                 "*.gguf"
             ]
             for pattern in model_patterns:
-                matches = list(self.models_dir.glob(pattern))
+                matches = [
+                    p for p in self.models_dir.glob(pattern)
+                    if "orchestrator" not in p.name.lower()
+                ]
                 if matches:
                     model_path = matches[0]
                     break
@@ -498,6 +505,9 @@ class LLMService:
         # Task 0.5: Enable Prompt Caching
         n_ctx = int(os.environ.get("ATLAS_N_CTX", "8192"))
         logger.info(f"Llama Context Size: {n_ctx}")
+
+        from app.services import model_slot
+        model_slot.acquire("ingest", self.unload)
 
         self._llm = Llama(
             model_path=str(model_path),
@@ -551,6 +561,32 @@ class LLMService:
         logger.info(f"Model type: {self._model_type}, Device: {self._device}")
         logger.info(f"GPU layers: {self._gpu_layers}, actual device: {self._device}")
     
+    def unload(self) -> None:
+        """Drop the resident LLM so the GPU slot is free.
+
+        Called by the model slot coordinator when another owner (e.g. the
+        Nemotron orchestrator) needs the GPU. Safe to call when no model is
+        loaded.
+        """
+        if self._llm is None or self._llm == "FALLBACK":
+            return
+        logger.info("Unloading ingestion LLM: %s", self._active_model_name)
+        try:
+            del self._llm
+        except Exception:
+            pass
+        self._llm = None
+        self._active_model_name = None
+        self._device = "unloaded"
+        import gc
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass
+
     def _load_embedder(self):
         """Load the embedding model (lazy loading, thread-safe).
 
@@ -1081,11 +1117,32 @@ class LLMService:
                 self._device = "cpu"
                 self._active_model_name = None
                 return ""
-            
-            # Load the first available model
-            model_to_load = available[0]
+
+            # Prefer a small ingestion model so VRAM is left for the Nemotron
+            # orchestrator. Skip any *Orchestrator*.gguf — that file belongs to
+            # AtlasOrchestratorService, not this one.
+            priority = [
+                "qwen2.5-1.5b-instruct",
+                "qwen2.5-3b-instruct",
+                "phi-3.5-mini-instruct",
+                "llama-3-8b-instruct",
+                "meta-llama-3-8b-instruct",
+            ]
+            lower_to_real = {n.lower(): n for n in available if "orchestrator" not in n.lower()}
+            model_to_load: Optional[str] = None
+            for pref in priority:
+                for lower_name, real_name in lower_to_real.items():
+                    if lower_name.startswith(pref):
+                        model_to_load = real_name
+                        break
+                if model_to_load:
+                    break
+            if model_to_load is None:
+                # Fall back to the first non-orchestrator model on disk
+                model_to_load = next(iter(lower_to_real.values()), available[0])
+
             logger.info(f"Loading default model at startup: {model_to_load}")
-            
+
             async with self._model_lock:
                 loop = asyncio.get_running_loop()
                 await loop.run_in_executor(None, self._load_llm, model_to_load)
