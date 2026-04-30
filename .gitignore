@@ -22,6 +22,7 @@ config.yml
 .claude/worktrees/
 
 # --- Local Analysis & Scratch Files ---
+/BILL Gates _DK-AT April 24.docx
 benchmark/
 check_orphans.py
 orphans.txt

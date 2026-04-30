@@ -1,4 +1,27 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
+  "includeCoAuthoredBy": false,
+  "includeGitInstructions": false,
+  "permissions": {
+    "ask": [
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(git rm *)",
+      "Bash(git tag *)"
+    ],
+    "deny": [
+      "Bash(git clean *)",
+      "Bash(git reset *)",
+      "Bash(git push --force*)",
+      "Bash(git push -f*)"
+    ],
+    "disableBypassPermissionsMode": "disable"
+  },
   "hooks": {
     "PostToolUse": [
       {
